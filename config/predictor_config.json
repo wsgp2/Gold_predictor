@@ -1,0 +1,12 @@
+{
+    "target_type": "binary",
+    "horizon": 1,
+    "sequence_length": 10,
+    "xgb_model_path": "",
+    "lstm_model_path": "",
+    "ensemble_info_path": "",
+    "telegram_token": "",
+    "telegram_chat_id": "",
+    "prediction_time": "10:00",
+    "verification_time": "10:00"
+}

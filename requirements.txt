@@ -1,0 +1,16 @@
+yfinance
+pandas
+numpy
+scikit-learn
+matplotlib
+seaborn
+xgboost
+tensorflow
+lightgbm
+python-telegram-bot
+joblib
+statsmodels
+tqdm
+requests
+prophet
+optuna
