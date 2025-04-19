@@ -14,9 +14,7 @@ from datetime import datetime
 
 # Для XGBoost
 import xgboost as xgb
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, mean_squared_error, mean_absolute_error, r2_score, classification_report, confusion_matrix, roc_auc_score
 
 # Для LSTM
 import tensorflow as tf
@@ -50,6 +48,7 @@ class XGBoostModel:
         self.model_dir = model_dir
         self.target_type = target_type
         self.model = None
+        self.feature_names = None
         
         # Создание директории для моделей, если она не существует
         os.makedirs(model_dir, exist_ok=True)
@@ -65,7 +64,8 @@ class XGBoostModel:
                 'colsample_bytree': 0.8,
                 'min_child_weight': 1,
                 'gamma': 0,
-                'seed': 42
+                'seed': 42,
+                'verbosity': 1
             }
         elif target_type == 'regression':
             self.params = {
@@ -77,20 +77,22 @@ class XGBoostModel:
                 'colsample_bytree': 0.8,
                 'min_child_weight': 1,
                 'gamma': 0,
-                'seed': 42
+                'seed': 42,
+                'verbosity': 1
             }
         elif target_type == 'classification':
             self.params = {
                 'objective': 'multi:softprob',
                 'eval_metric': 'mlogloss',
-                'num_class': 5,  # 5 классов: сильно вниз, вниз, боковик, вверх, сильно вверх
                 'eta': 0.1,
                 'max_depth': 6,
                 'subsample': 0.8,
                 'colsample_bytree': 0.8,
                 'min_child_weight': 1,
                 'gamma': 0,
-                'seed': 42
+                'seed': 42,
+                'verbosity': 1,
+                'num_class': 3
             }
         else:
             raise ValueError(f"Неизвестный тип задачи: {target_type}")
@@ -113,16 +115,31 @@ class XGBoostModel:
         """
         logger.info("Начало обучения модели XGBoost")
         
+        # Сохраняем имена признаков для последующего использования при предсказании
+        if hasattr(X_train, 'columns'):
+            self.feature_names = X_train.columns.tolist()
+            logger.info(f"Сохранен список из {len(self.feature_names)} признаков для XGBoost")
+            # Логируем первые 10 признаков для проверки
+            logger.info(f"Первые признаки: {self.feature_names[:10]}")
+        else:
+            logger.warning("Невозможно сохранить имена признаков, X_train не имеет атрибута columns")
+        
         # Обновляем параметры, если предоставлены
         if params is not None:
             self.params.update(params)
         
-        # Преобразуем данные в формат DMatrix
-        dtrain = xgb.DMatrix(X_train, label=y_train)
+        # Преобразуем данные в формат DMatrix с указанием имен признаков
+        if self.feature_names:
+            dtrain = xgb.DMatrix(X_train, label=y_train, feature_names=self.feature_names)
+        else:
+            dtrain = xgb.DMatrix(X_train, label=y_train)
         
         # Если есть валидационные данные, создаем DMatrix для них
         if X_val is not None and y_val is not None:
-            dval = xgb.DMatrix(X_val, label=y_val)
+            if self.feature_names:
+                dval = xgb.DMatrix(X_val, label=y_val, feature_names=self.feature_names)
+            else:
+                dval = xgb.DMatrix(X_val, label=y_val)
             watchlist = [(dtrain, 'train'), (dval, 'eval')]
         else:
             watchlist = [(dtrain, 'train')]
@@ -141,39 +158,79 @@ class XGBoostModel:
         
         return self.model
     
-    def predict(self, X):
+    def predict(self, X, threshold=0.3):
         """
         Предсказание с помощью обученной модели.
         
         Args:
             X (pandas.DataFrame): Данные для предсказания
+            threshold (float, optional): Порог для бинарной классификации (для преобразования вероятностей в классы). 
+                        По умолчанию 0.3, так как XGBoost часто дает низкие вероятности.
             
         Returns:
-            numpy.ndarray: Предсказания
+            numpy.ndarray: Предсказания (вероятности для классификации или значения для регрессии)
         """
         if self.model is None:
             logger.error("Модель не обучена")
             return None
         
-        # Преобразуем в DMatrix
-        dtest = xgb.DMatrix(X)
+        # Подготовка данных для предсказания
+        try:
+            # Проверяем, есть ли у нас сохраненные имена признаков
+            if self.feature_names and hasattr(X, 'columns'):
+                logger.info(f"Упорядочиваю признаки для XGBoost по сохраненному порядку")
+                
+                # Проверяем наличие всех необходимых признаков
+                missing_features = [f for f in self.feature_names if f not in X.columns]
+                if missing_features:
+                    logger.warning(f"Отсутствуют {len(missing_features)} признаков для XGBoost: {missing_features[:5] if len(missing_features) > 5 else missing_features}")
+                
+                # Упорядочиваем признаки в соответствии с порядком при обучении
+                X_ordered = X.reindex(columns=self.feature_names, fill_value=0)
+                
+                # Создаем DMatrix с упорядоченными признаками
+                dmatrix = xgb.DMatrix(X_ordered)
+                logger.info(f"Создан DMatrix с размерностью {dmatrix.num_row()}, {dmatrix.num_col()}")
+            else:
+                # Если нет имен признаков, используем данные как есть
+                logger.warning("Нет сохраненных имен признаков, использую данные как есть")
+                dmatrix = xgb.DMatrix(X)
+        except Exception as e:
+            logger.error(f"Ошибка при подготовке данных для XGBoost: {str(e)}")
+            return None
         
-        # Получаем предсказания
-        if self.target_type == 'binary':
-            # Вероятности принадлежности к положительному классу
-            y_pred_proba = self.model.predict(dtest)
-            y_pred = (y_pred_proba > 0.5).astype(int)
+        # Получаем предсказания в зависимости от типа целевой переменной
+        if self.target_type == 'binary' or self.target_type == 'classification':
+            # Для классификации - получаем вероятности
+            probabilities = self.model.predict(dmatrix)
+            
+            # Логируем статистику по вероятностям
+            if len(probabilities) > 0:
+                mean_prob = np.mean(probabilities)
+                min_prob = np.min(probabilities)
+                max_prob = np.max(probabilities)
+                logger.info(f"XGBoost предсказания - средняя вероятность: {mean_prob:.4f}, мин: {min_prob:.4f}, макс: {max_prob:.4f}")
+                
+                # Рассчитываем долю предсказаний позитивного класса
+                binary_predictions = (probabilities > threshold).astype(int)
+                positive_ratio = np.mean(binary_predictions) * 100
+                logger.info(f"XGBoost предсказывает положительный класс в {positive_ratio:.2f}% случаев (порог {threshold})")
+            
+            return probabilities
             
         elif self.target_type == 'regression':
-            # Прямые предсказания для регрессии
-            y_pred = self.model.predict(dtest)
+            # Для регрессии - прямое предсказание числовых значений
+            predictions = self.model.predict(dmatrix)
             
-        elif self.target_type == 'classification':
-            # Вероятности для каждого класса, берем класс с максимальной вероятностью
-            y_pred_proba = self.model.predict(dtest)
-            y_pred = np.argmax(y_pred_proba, axis=1)
-        
-        return y_pred
+            # Логируем информацию о предсказаниях
+            if len(predictions) > 0:
+                logger.info(f"XGBoost предсказания регрессии - среднее: {np.mean(predictions):.4f}, мин: {np.min(predictions):.4f}, макс: {np.max(predictions):.4f}")
+            
+            return predictions
+            
+        else:
+            logger.error(f"Неизвестный тип целевой переменной: {self.target_type}")
+            return None
     
     def predict_proba(self, X):
         """
@@ -195,13 +252,14 @@ class XGBoostModel:
         # Получаем вероятности
         return self.model.predict(dtest)
     
-    def evaluate(self, X, y_true):
+    def evaluate(self, X, y_true, threshold=0.3):
         """
         Оценка качества модели.
         
         Args:
             X (pandas.DataFrame): Данные для предсказания
             y_true (pandas.Series): Истинные метки
+            threshold (float, optional): Порог для преобразования вероятностей в классы. По умолчанию 0.3.
             
         Returns:
             dict: Метрики качества
@@ -210,26 +268,64 @@ class XGBoostModel:
             logger.error("Модель не обучена")
             return None
         
-        # Получаем предсказания
-        y_pred = self.predict(X)
+        # Получаем вероятностные предсказания
+        y_pred_proba = self.predict(X, threshold=threshold)
+        logger.info(f"Форма вероятностных предсказаний XGBoost: {y_pred_proba.shape}")
         
+        # В XGBoost вероятности могут быть низкими, поэтому используем настраиваемый порог
+        y_pred_binary = (y_pred_proba > threshold).astype(int)
+        
+        # Проверяем формы массивов
+        logger.info(f"Форма y_true: {y_true.shape}, тип: {y_true.dtype}")
+        logger.info(f"Форма y_pred_binary: {y_pred_binary.shape}, тип: {y_pred_binary.dtype}")
+        logger.info(f"Используемый порог для бинарной классификации: {threshold}")
+            
+        # Убедимся, что размерности совпадают
+        if isinstance(y_true, pd.Series):
+            y_true = y_true.values
+            
         metrics = {}
         
         if self.target_type == 'binary':
             # Метрики для бинарной классификации
-            metrics['accuracy'] = accuracy_score(y_true, y_pred)
-            metrics['precision'] = precision_score(y_true, y_pred)
-            metrics['recall'] = recall_score(y_true, y_pred)
-            metrics['f1'] = f1_score(y_true, y_pred)
+            metrics['accuracy'] = accuracy_score(y_true, y_pred_binary)
             
-            # Процент правильного угадывания направления
-            metrics['direction_accuracy'] = accuracy_score(y_true, y_pred)
+            # Проверяем, чтобы избежать ошибок при делении на ноль
+            try:
+                metrics['precision'] = precision_score(y_true, y_pred_binary)
+                metrics['recall'] = recall_score(y_true, y_pred_binary)
+                metrics['f1'] = f1_score(y_true, y_pred_binary)
+            except Exception as e:
+                # Если все предсказания одного класса, может быть ошибка
+                logger.error(f"Ошибка при расчете метрик: {e}")
+                metrics['precision'] = 0.0
+                metrics['recall'] = 0.0
+                metrics['f1'] = 0.0
             
-            logger.info(f"Метрики XGBoost (бинарная классификация):")
+            # Рассчитываем AUC-ROC на основе вероятностей
+            try:
+                metrics['roc_auc'] = roc_auc_score(y_true, y_pred_proba)
+            except Exception as e:
+                logger.error(f"Ошибка при расчете ROC AUC: {e}")
+                metrics['roc_auc'] = 0.5  # Значение по умолчанию для случайной модели
+            
+            # Направление предсказаний (тоже самое, что и accuracy для бинарной классификации)
+            metrics['direction_accuracy'] = metrics['accuracy']
+            
+            # Доля положительных предсказаний
+            metrics['positive_rate'] = np.mean(y_pred_binary)
+            
+            # Доля положительных фактических классов
+            metrics['actual_positive_rate'] = np.mean(y_true)
+            
+            logger.info(f"Метрики XGBoost (бинарная классификация, порог {threshold:.2f}):")
             logger.info(f"Accuracy: {metrics['accuracy']:.4f}")
             logger.info(f"Precision: {metrics['precision']:.4f}")
             logger.info(f"Recall: {metrics['recall']:.4f}")
             logger.info(f"F1: {metrics['f1']:.4f}")
+            logger.info(f"ROC AUC: {metrics['roc_auc']:.4f}")
+            logger.info(f"Доля предсказанных положительных классов: {metrics['positive_rate']:.4f}")
+            logger.info(f"Доля фактических положительных классов: {metrics['actual_positive_rate']:.4f}")
             
         elif self.target_type == 'regression':
             # Метрики для регрессии
@@ -285,7 +381,18 @@ class XGBoostModel:
         self.model.save_model(file_path)
         logger.info(f"Модель XGBoost сохранена в {file_path}")
         
-        # Сохраняем параметры модели
+        # Сохраняем параметры модели и имена признаков
+        metadata = {
+            'params': self.params,
+            'feature_names': self.feature_names,
+            'target_type': self.target_type,
+            'saved_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        metadata_file = os.path.join(self.model_dir, f"{os.path.splitext(filename)[0]}_metadata.joblib")
+        joblib.dump(metadata, metadata_file)
+        logger.info(f"Метаданные XGBoost (включая {len(self.feature_names) if self.feature_names else 0} признаков) сохранены в {metadata_file}")
+        
+        # Для обратной совместимости сохраняем и старый формат параметров
         params_file = os.path.join(self.model_dir, f"{os.path.splitext(filename)[0]}_params.joblib")
         joblib.dump(self.params, params_file)
         
@@ -311,10 +418,39 @@ class XGBoostModel:
             self.model = xgb.Booster()
             self.model.load_model(file_path)
             
-            # Пытаемся загрузить параметры модели
-            params_file = os.path.join(self.model_dir, f"{os.path.splitext(filename)[0]}_params.joblib")
-            if os.path.exists(params_file):
-                self.params = joblib.load(params_file)
+            # Сначала пробуем загрузить метаданные (имена признаков и параметры)
+            metadata_file = os.path.join(self.model_dir, f"{os.path.splitext(filename)[0]}_metadata.joblib")
+            if os.path.exists(metadata_file):
+                try:
+                    metadata = joblib.load(metadata_file)
+                    if 'feature_names' in metadata and metadata['feature_names']:
+                        self.feature_names = metadata['feature_names']
+                        logger.info(f"Загружено {len(self.feature_names)} имен признаков из метаданных")
+                        # Логируем первые несколько признаков для проверки
+                        logger.info(f"Первые признаки: {self.feature_names[:5] if len(self.feature_names) > 5 else self.feature_names}")
+                        
+                    if 'params' in metadata:
+                        self.params = metadata['params']
+                        logger.info("Загружены параметры модели из метаданных")
+                    
+                    if 'target_type' in metadata:
+                        self.target_type = metadata['target_type']
+                        logger.info(f"Загружен тип целевой переменной: {self.target_type}")
+                    
+                    logger.info(f"Метаданные успешно загружены из {metadata_file}")
+                except Exception as e:
+                    logger.error(f"Ошибка при загрузке метаданных: {e}")
+            else:
+                # Для обратной совместимости пытаемся загрузить старый формат параметров
+                params_file = os.path.join(self.model_dir, f"{os.path.splitext(filename)[0]}_params.joblib")
+                if os.path.exists(params_file):
+                    try:
+                        self.params = joblib.load(params_file)
+                        logger.info("Загружены параметры модели из старого формата")
+                    except Exception as e:
+                        logger.error(f"Ошибка при загрузке параметров: {e}")
+                else:
+                    logger.warning("Файлы метаданных и параметров не найдены, используются значения по умолчанию")
             
             logger.info(f"Модель XGBoost загружена из {file_path}")
             return self.model
@@ -491,27 +627,36 @@ class LSTMModel:
             X (numpy.ndarray): Данные для предсказания формы (n_samples, sequence_length, n_features)
 
         Returns:
-            numpy.ndarray: Предсказания
+            numpy.ndarray: Предсказания (исходные вероятности для бинарной классификации)
         """
         logger = logging.getLogger("models")
         logger.info(f"LSTMModel.predict: X shape = {X.shape}")
         if self.model is None:
             logger.error("Модель не обучена")
             return None
+        
+        # Получаем предсказания от модели
         predictions = self.model.predict(X)
         logger.info(f"LSTMModel.predict: predictions shape = {predictions.shape}")
+        
+        # Сохраняем исходные вероятности для расчета уверенности
         if self.target_type == 'binary':
-            result = (predictions > 0.5).astype(int).flatten()
-            logger.info(f"LSTMModel.predict: result shape = {result.shape}")
-            return result
+            # Возвращаем исходные вероятности вместо преобразования в 0/1
+            # Флаттеним предсказания для удобства
+            proba = predictions.flatten()
+            logger.info(f"LSTMModel.predict: Вероятности = {proba}")
+            return proba
         elif self.target_type == 'regression':
             result = predictions.flatten()
             logger.info(f"LSTMModel.predict: result shape = {result.shape}")
             return result
         elif self.target_type == 'classification':
+            # Для многоклассовой классификации возвращаем индекс класса с максимальной вероятностью
             result = np.argmax(predictions, axis=1)
             logger.info(f"LSTMModel.predict: result shape = {result.shape}")
             return result
+        
+        # В остальных случаях возвращаем исходные предсказания
         logger.info(f"LSTMModel.predict: predictions shape = {predictions.shape}")
         return predictions
     
@@ -547,26 +692,48 @@ class LSTMModel:
             logger.error("Модель не обучена")
             return None
         
-        # Получаем предсказания
-        y_pred = self.predict(X)
+        # Получаем вероятностные предсказания
+        y_pred_proba = self.predict(X)
+        logger.info(f"Форма вероятностных предсказаний: {y_pred_proba.shape}")
+        
+        # Создаем бинарные предсказания для метрик классификации
+        if self.target_type == 'binary':
+            # Преобразуем вероятности в бинарные метки с порогом 0.5
+            y_pred_binary = (y_pred_proba > 0.5).astype(int)
+            
+            # Проверяем формы массивов
+            logger.info(f"Форма y_true: {y_true.shape}, тип: {y_true.dtype}")
+            logger.info(f"Форма y_pred_binary: {y_pred_binary.shape}, тип: {y_pred_binary.dtype}")
+            
+            # Убедимся, что размерности совпадают (убираем лишние размерности, если есть)
+            if len(y_true.shape) > 1 and y_true.shape[1] == 1:
+                y_true = y_true.ravel()
+            if len(y_pred_binary.shape) > 1 and y_pred_binary.shape[1] == 1:
+                y_pred_binary = y_pred_binary.ravel()
+                
+            logger.info(f"После приведения - y_true: {y_true.shape}, y_pred_binary: {y_pred_binary.shape}")
         
         metrics = {}
         
         if self.target_type == 'binary':
             # Метрики для бинарной классификации
-            metrics['accuracy'] = accuracy_score(y_true, y_pred)
-            metrics['precision'] = precision_score(y_true, y_pred)
-            metrics['recall'] = recall_score(y_true, y_pred)
-            metrics['f1'] = f1_score(y_true, y_pred)
+            metrics['accuracy'] = accuracy_score(y_true, y_pred_binary)
+            metrics['precision'] = precision_score(y_true, y_pred_binary)
+            metrics['recall'] = recall_score(y_true, y_pred_binary)
+            metrics['f1'] = f1_score(y_true, y_pred_binary)
             
-            # Процент правильного угадывания направления
-            metrics['direction_accuracy'] = accuracy_score(y_true, y_pred)
+            # Сохраняем AUC-ROC, который работает с вероятностями
+            metrics['roc_auc'] = roc_auc_score(y_true, y_pred_proba)
+            
+            # Процент правильного угадывания направления (используем бинарные предсказания)
+            metrics['direction_accuracy'] = accuracy_score(y_true, y_pred_binary)
             
             logger.info(f"Метрики LSTM (бинарная классификация):")
             logger.info(f"Accuracy: {metrics['accuracy']:.4f}")
             logger.info(f"Precision: {metrics['precision']:.4f}")
             logger.info(f"Recall: {metrics['recall']:.4f}")
             logger.info(f"F1: {metrics['f1']:.4f}")
+            logger.info(f"ROC AUC: {metrics['roc_auc']:.4f}")
             
         elif self.target_type == 'regression':
             # Метрики для регрессии
@@ -698,59 +865,85 @@ class EnsembleModel:
         self.weights[model_name] = weight
         logger.info(f"Модель {model_name} добавлена в ансамбль с весом {weight}")
     
-    def predict(self, X, X_sequences=None):
+    def predict(self, X, X_sequences=None, threshold=0.45):
         """
         Предсказание с помощью ансамбля моделей.
+        
+        Args:
+            X: Фичи для моделей, не требующих последовательности (XGBoost)
+            X_sequences: Фичи для LSTM модели (с временными шагами)
+            threshold: Порог для бинарной классификации (0.45 по умолчанию)
+            
+        Returns:
+            np.ndarray: Предсказания ансамбля
         """
         logger = logging.getLogger("models")
         logger.info(f"EnsembleModel.predict: X shape = {getattr(X, 'shape', None)}, X_sequences shape = {getattr(X_sequences, 'shape', None)}")
+        
         if not self.models:
             logger.error("Ансамбль не содержит моделей")
             return None
+            
+        # Получаем предсказания от всех моделей
         predictions = {}
         for name, model in self.models.items():
+            # Адаптивно выбираем входные данные для каждой модели
             if name == 'lstm' and X_sequences is not None:
                 pred = model.predict(X_sequences)
             else:
                 pred = model.predict(X)
+                
+            # Логируем информацию о предсказаниях
             logger.info(f"EnsembleModel.predict: {name} pred shape = {getattr(pred, 'shape', None)}")
+            if self.target_type == 'binary':
+                # Для бинарной классификации логируем распределение вероятностей
+                logger.info(f"{name} предсказывает положительный класс в {np.mean(pred > 0.5) * 100:.2f}% случаев")
+                logger.info(f"{name} средняя вероятность: {np.mean(pred):.4f}, мин: {np.min(pred):.4f}, макс: {np.max(pred):.4f}")
+            
+            # Применяем вес модели
             predictions[name] = pred * self.weights[name]
-        # --- ВЫРАВНИВАНИЕ длин предсказаний ---
+            
+        # Выравниваем длины предсказаний, если они разные
         min_len = min(pred.shape[0] for pred in predictions.values())
         for name in predictions:
             if predictions[name].shape[0] > min_len:
                 logger.warning(f"EnsembleModel.predict: {name} pred trimmed from {predictions[name].shape[0]} to {min_len}")
                 predictions[name] = predictions[name][:min_len]
-        # --------------------------------------
+        
+        # Сумма весов для нормализации
         weights_sum = sum(self.weights.values())
-        if self.target_type == 'binary' or self.target_type == 'regression':
-            ensemble_pred = sum(pred for pred in predictions.values()) / weights_sum
-            if isinstance(ensemble_pred, np.ndarray) and ensemble_pred.ndim > 1:
-                ensemble_pred = ensemble_pred.flatten()
-            logger.info(f"EnsembleModel.predict: ensemble_pred shape = {ensemble_pred.shape}")
-        elif self.target_type == 'classification':
-            ensemble_pred_proba = sum(pred for pred in predictions.values()) / weights_sum
-            ensemble_pred = np.argmax(ensemble_pred_proba, axis=1)
-            logger.info(f"EnsembleModel.predict: ensemble_pred shape = {ensemble_pred.shape}")
+        
+        # Разные обработки в зависимости от типа задачи
         if self.target_type == 'binary':
             # Взвешенная сумма вероятностей
             ensemble_pred_proba = sum(pred for pred in predictions.values()) / weights_sum
-            ensemble_pred = (ensemble_pred_proba > 0.5).astype(int)
             
+            # Применяем настраиваемый порог классификации (0.45 по умолчанию вместо 0.5)
+            ensemble_pred = (ensemble_pred_proba > threshold).astype(int)
+            
+            # Логируем информацию о распределении вероятностей и предсказаний
+            logger.info(f"Ансамбль предсказывает положительный класс в {np.mean(ensemble_pred) * 100:.2f}% случаев (порог {threshold})")
+            logger.info(f"Ансамбль средняя вероятность: {np.mean(ensemble_pred_proba):.4f}, мин: {np.min(ensemble_pred_proba):.4f}, макс: {np.max(ensemble_pred_proba):.4f}")
+            
+            # Приводим к нужной размерности
             if isinstance(ensemble_pred, np.ndarray) and ensemble_pred.ndim > 1:
                 ensemble_pred = ensemble_pred.flatten()
-            
+                
         elif self.target_type == 'regression':
             # Взвешенная сумма предсказаний
             ensemble_pred = sum(pred for pred in predictions.values()) / weights_sum
             
+            # Приводим к нужной размерности
             if isinstance(ensemble_pred, np.ndarray) and ensemble_pred.ndim > 1:
                 ensemble_pred = ensemble_pred.flatten()
-            
+                
         elif self.target_type == 'classification':
             # Взвешенная сумма вероятностей по классам
             ensemble_pred_proba = sum(pred for pred in predictions.values()) / weights_sum
             ensemble_pred = np.argmax(ensemble_pred_proba, axis=1)
+        
+        # Проверяем и логируем размерность итоговых предсказаний
+        logger.info(f"EnsembleModel.predict: ensemble_pred shape = {getattr(ensemble_pred, 'shape', None)}")
         
         return ensemble_pred
     
@@ -801,17 +994,37 @@ class EnsembleModel:
     
     def evaluate(self, X, y_true, X_sequences=None):
         """
-        Оценка качества ансамбля моделей.
-
-        Args:
-            X (pandas.DataFrame): Данные для предсказания табличных моделей
-            y_true (pandas.Series or numpy.ndarray): Истинные метки
-            X_sequences (numpy.ndarray, optional): Последовательности для LSTM моделей
-
-        Returns:
-            dict: Метрики качества
+        Оценка качества ансамбля моделей с выравниванием по общим индексам.
         """
         logger = logging.getLogger("models")
+        # --- ВЫРАВНИВАНИЕ длин X, X_sequences, y_true ---
+        # Если есть X_sequences (LSTM), используем только пересечение индексов X и X_sequences
+        if X_sequences is not None and hasattr(X, 'index'):
+            # Получаем индексы X (обычно pd.DataFrame) и X_sequences (обычно np.ndarray)
+            idx_xgb = set(X.index)
+            idx_lstm = set(range(X_sequences.shape[0]))
+            # Если есть атрибуты индексов для X_sequences, используем их, иначе предполагаем range
+            intersect_idx = sorted(list(idx_xgb & set(idx_lstm))) if isinstance(X_sequences, pd.DataFrame) and hasattr(X_sequences, 'index') else sorted(list(idx_xgb & set(range(len(X)))))
+            if not intersect_idx:
+                logger.warning("Нет пересечения индексов X и X_sequences для ансамбля. Будет использовано минимальное количество строк.")
+                min_len = min(len(X), X_sequences.shape[0])
+                X = X.iloc[:min_len]
+                X_sequences = X_sequences[:min_len]
+                y_true = y_true[:min_len]
+            else:
+                logger.info(f"Пересечение индексов для ансамбля: {len(intersect_idx)} из {len(X)} (XGBoost) и {X_sequences.shape[0]} (LSTM)")
+                X = X.loc[intersect_idx]
+                X_sequences = X_sequences[intersect_idx]
+                y_true = y_true.loc[intersect_idx] if hasattr(y_true, 'loc') else y_true[:len(intersect_idx)]
+        else:
+            # Если только одна модель, просто приводим к минимальному размеру
+            min_len = min(len(X), len(y_true))
+            X = X.iloc[:min_len] if hasattr(X, 'iloc') else X[:min_len]
+            y_true = y_true.iloc[:min_len] if hasattr(y_true, 'iloc') else y_true[:min_len]
+            if X_sequences is not None:
+                X_sequences = X_sequences[:min_len]
+        logger.info(f"[Ensemble] Итоговые размеры для оценки: X={getattr(X, 'shape', None)}, X_sequences={getattr(X_sequences, 'shape', None)}, y_true={getattr(y_true, 'shape', None)}")
+        # Получаем предсказания ансамбля
         y_pred = self.predict(X, X_sequences)
         logger.info(f"EnsembleModel.evaluate: y_true shape = {getattr(y_true, 'shape', None)}, y_pred shape = {getattr(y_pred, 'shape', None)}")
         # --- ВЫРАВНИВАНИЕ длин y_true и y_pred ---
@@ -827,9 +1040,6 @@ class EnsembleModel:
             logger.error("Ансамбль не содержит моделей")
             return None
         
-        # Получаем предсказания ансамбля
-        y_pred = self.predict(X, X_sequences)
-        
         if y_pred is None:
             return None
         
@@ -841,46 +1051,35 @@ class EnsembleModel:
             metrics['precision'] = precision_score(y_true, y_pred)
             metrics['recall'] = recall_score(y_true, y_pred)
             metrics['f1'] = f1_score(y_true, y_pred)
-            
-            # Процент правильного угадывания направления
             metrics['direction_accuracy'] = accuracy_score(y_true, y_pred)
-            
             logger.info(f"Метрики ансамбля (бинарная классификация):")
             logger.info(f"Accuracy: {metrics['accuracy']:.4f}")
             logger.info(f"Precision: {metrics['precision']:.4f}")
             logger.info(f"Recall: {metrics['recall']:.4f}")
             logger.info(f"F1: {metrics['f1']:.4f}")
-            
         elif self.target_type == 'regression':
             # Метрики для регрессии
             metrics['mse'] = mean_squared_error(y_true, y_pred)
             metrics['rmse'] = np.sqrt(metrics['mse'])
             metrics['mae'] = mean_absolute_error(y_true, y_pred)
             metrics['r2'] = r2_score(y_true, y_pred)
-            
-            # Процент правильного угадывания направления
             if isinstance(y_true, pd.Series):
                 y_true = y_true.values
-            
             y_direction_true = np.sign(np.diff(np.append([y_true[0]], y_true)))
             y_direction_pred = np.sign(np.diff(np.append([y_true[0]], y_pred)))
             metrics['direction_accuracy'] = np.mean(y_direction_true == y_direction_pred)
-            
             logger.info(f"Метрики ансамбля (регрессия):")
             logger.info(f"RMSE: {metrics['rmse']:.4f}")
             logger.info(f"MAE: {metrics['mae']:.4f}")
             logger.info(f"R²: {metrics['r2']:.4f}")
             logger.info(f"Direction Accuracy: {metrics['direction_accuracy']:.4f}")
-            
         elif self.target_type == 'classification':
             # Метрики для мультиклассовой классификации
             metrics['accuracy'] = accuracy_score(y_true, y_pred)
-            
             logger.info(f"Метрики ансамбля (мультиклассовая классификация):")
             logger.info(f"Accuracy: {metrics['accuracy']:.4f}")
             logger.info("\nКлассификационный отчет:")
             logger.info(classification_report(y_true, y_pred))
-        
         return metrics
     
     def save_model(self, filename=None):

@@ -327,7 +327,14 @@ class GoldPredictor:
                 'Volume_ratio_10', 'Volume_MA_20', 'Volume_ratio_20', 'Volume_Price'
             ]
             
-            # Добавляем мэппинг имен признаков
+            # Добавляем Future_Close для совместимости с моделями
+            if 'Future_Close' not in data_for_features.columns:
+                data_for_features['Future_Close'] = data_for_features['Close']
+                logger.info("Добавлен признак Future_Close для совместимости с моделями")
+
+            # Получаем только числовые признаки
+            numeric_features = data_for_features.select_dtypes(include=[np.number])
+            
             # Подготавливаем последнюю строку для XGBoost
             last_features = numeric_features.iloc[-1:].drop(['Target', 'Future_Close'], axis=1, errors='ignore')
             
@@ -375,18 +382,69 @@ class GoldPredictor:
         # Создаем копию, чтобы не изменять оригинальный датафрейм
         features_copy = features_df.copy()
         
-        # Полный список всех признаков, которые ожидает модель XGBoost
-        # Необходимо сохранить порядок признаков точно как при обучении
-        expected_features = [
-            'Close', 'High', 'Low', 'Open', 'Volume', 'MA_5', 'MA_ratio_5', 'MA_10', 'MA_ratio_10',
-            'MA_20', 'MA_ratio_20', 'MA_50', 'MA_ratio_50', 'MA_100', 'MA_ratio_100', 'EMA_5', 'EMA_ratio_5',
-            'EMA_10', 'EMA_ratio_10', 'EMA_20', 'EMA_ratio_20', 'EMA_50', 'EMA_ratio_50', 'EMA_100',
-            'EMA_ratio_100', 'RSI_7', 'RSI_14', 'RSI_21', 'MACD_line', 'MACD_signal', 'MACD_histogram',
-            'BB_upper_20', 'BB_lower_20', 'BB_width_20', 'BB_position_20', 'Stoch_%K_14', 'Stoch_%D_14',
-            'ATR_14', 'CCI_20', 'Price_Change', 'Return', 'Volatility_5', 'Volatility_10', 'Volatility_21',
-            'High_Low_Range', 'High_Low_Range_Pct', 'Volume_MA_5', 'Volume_ratio_5', 'Volume_MA_10',
-            'Volume_ratio_10', 'Volume_MA_20', 'Volume_ratio_20', 'Volume_Price'
-        ]
+        # Загружаем точный список признаков из метаданных модели
+        import joblib
+        try:
+            model_path = os.path.join(self.model_dir, self.config["xgb_model_path"])
+            metadata_path = model_path.replace('.json', '_metadata.joblib')
+            metadata = joblib.load(metadata_path)
+            expected_features = metadata.get('feature_names', [])
+            logger.info(f"Загружено {len(expected_features)} признаков из метаданных XGBoost модели")
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке метаданных модели: {e}")
+            # Дополнительные признаки, которые могут потребоваться модели
+            expected_features = [
+                'Close', 'High', 'Low', 'Open', 'Volume', 
+                "('Close', 'GC=F')", "('High', 'GC=F')", "('Low', 'GC=F')", "('Open', 'GC=F')", "('Volume', 'GC=F')",
+                'MA_5', 'MA_ratio_5', 'MA_10', 'MA_ratio_10', 'MA_20', 'MA_ratio_20', 'MA_50', 'MA_ratio_50', 
+                'MA_100', 'MA_ratio_100', 'EMA_5', 'EMA_ratio_5', 'EMA_10', 'EMA_ratio_10', 'EMA_20', 'EMA_ratio_20', 
+                'EMA_50', 'EMA_ratio_50', 'EMA_100', 'EMA_ratio_100', 'RSI_7', 'RSI_14', 'RSI_21', 
+                'MACD_line', 'MACD_signal', 'MACD_histogram', 'MACD', 'MACD_Signal', 'MACD_Hist', 'MACD_Hist_Change',
+                'BB_upper_20', 'BB_lower_20', 'BB_width_20', 'BB_position_20', 
+                'BB_Upper_20', 'BB_Lower_20', 'BB_Width_20', 'BB_Position_20',
+                'Stoch_%K_14', 'Stoch_%D_14', 'ATR_14', 'CCI_20', 'Price_Change', 'Return', 
+                'Volatility_5', 'Volatility_10', 'Volatility_21', 'High_Low_Range', 'High_Low_Range_Pct', 
+                'Volume_MA_5', 'Volume_ratio_5', 'Volume_MA_10', 'Volume_ratio_10', 'Volume_MA_20', 'Volume_ratio_20', 'Volume_Price',
+                'Future_Close'
+            ]
+        
+        # Добавляем кортежи для базовых признаков
+        for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+            if col in features_copy.columns:
+                tuple_col = f"('{col}', 'GC=F')"
+                if tuple_col not in features_copy.columns:
+                    features_copy[tuple_col] = features_copy[col]
+        
+        # Добавляем все недостающие признаки
+        for feature in expected_features:
+            if feature not in features_copy.columns:
+                # Пытаемся найти альтернативные имена
+                alt_feature = None
+                
+                # Мэппинг альтернативных имен
+                if feature == 'MACD_line' and 'MACD' in features_copy.columns:
+                    alt_feature = 'MACD'
+                elif feature == 'MACD_signal' and 'MACD_Signal' in features_copy.columns:
+                    alt_feature = 'MACD_Signal'
+                elif feature == 'MACD_histogram' and 'MACD_Hist' in features_copy.columns:
+                    alt_feature = 'MACD_Hist'
+                elif feature == 'BB_upper_20' and 'BB_Upper_20' in features_copy.columns:
+                    alt_feature = 'BB_Upper_20'
+                elif feature == 'BB_lower_20' and 'BB_Lower_20' in features_copy.columns:
+                    alt_feature = 'BB_Lower_20'
+                elif feature == 'BB_width_20' and 'BB_Width_20' in features_copy.columns:
+                    alt_feature = 'BB_Width_20'
+                elif feature == 'BB_position_20' and 'BB_Position_20' in features_copy.columns:
+                    alt_feature = 'BB_Position_20'
+                elif feature == 'Future_Close' and 'Close' in features_copy.columns:
+                    alt_feature = 'Close'
+                
+                if alt_feature:
+                    features_copy[feature] = features_copy[alt_feature]
+                else:
+                    # Иначе создаем признак с нулевыми значениями
+                    logger.warning(f"Признак {feature} отсутствует, добавляем с нулевыми значениями")
+                    features_copy[feature] = 0.0
         
         # Проверяем наличие всех необходимых признаков и добавляем отсутствующие
         for feature in expected_features:
@@ -421,6 +479,43 @@ class GoldPredictor:
         inf_count = np.isinf(features_df.select_dtypes(include=[np.number])).sum().sum()
         logger.info(f"NaN значений: {nan_count}, Inf значений: {inf_count}")
     
+    def update_data(self):
+        """
+        Автоматическое обновление данных через Bybit для получения самых свежих данных.
+        
+        Returns:
+            bool: True если данные обновлены успешно, иначе False.
+        """
+        try:
+            # Загружаем переменные окружения и модуль обновления данных
+            from config_loader import load_environment_variables
+            load_environment_variables()
+            import os
+            from data_updater import update_gold_history_from_bybit
+            
+            # Получаем API ключи из переменных окружения
+            api_key = os.getenv('BYBIT_API_KEY', '')
+            api_secret = os.getenv('BYBIT_API_SECRET', '')
+            
+            # Проверяем наличие ключей
+            if not api_key or not api_secret:
+                logger.warning("Отсутствуют API ключи Bybit. Используем кэшированные данные.")
+                return False
+            
+            # Обновляем данные
+            csv_path = os.path.join(self.data_dir, 'GC_F_latest.csv')
+            update_result = update_gold_history_from_bybit(csv_path, api_key, api_secret)
+            
+            if update_result:
+                logger.info("Данные успешно обновлены через Bybit API")
+                return True
+            else:
+                logger.warning("Не удалось обновить данные через Bybit API")
+                return False
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении данных: {str(e)}")
+            return False
+    
     def predict(self):
         """
         Генерация прогноза цены золота на horizon дней вперед.
@@ -431,6 +526,9 @@ class GoldPredictor:
         if self.xgb_model is None and self.lstm_model is None and self.ensemble is None:
             logger.error("Ни одна модель не загружена")
             return None
+        
+        # Автоматически обновляем данные
+        self.update_data()
         
         # Получаем последние данные
         logger.info(f"Аргументы запуска: {getattr(self, 'args', None)}")
@@ -455,18 +553,32 @@ class GoldPredictor:
         last_features = data['last_features']
         last_sequence = data['last_sequence']
         
-        # Обрабатываем дату, независимо от формата (с временем или без)
+        # Определяем дату прогноза - всегда следующий день от текущей даты
         try:
+            # Получаем текущую дату
+            current_date = datetime.now()
+            
+            # Находим разницу между последними данными и текущей датой
             if isinstance(last_date, str):
                 # Если дата уже строка, извлекаем только дату
                 date_part = last_date.split()[0] if ' ' in last_date else last_date
-                prediction_date = (datetime.strptime(date_part, "%Y-%m-%d") + timedelta(days=self.config["horizon"])).strftime("%Y-%m-%d")
+                last_date_parsed = datetime.strptime(date_part, "%Y-%m-%d")
             else:
                 # Если это объект datetime или Timestamp
-                prediction_date = (last_date + timedelta(days=self.config["horizon"])).strftime("%Y-%m-%d")
+                last_date_parsed = last_date
+                
+            # Проверяем, насколько устарели данные
+            days_difference = (current_date.date() - last_date_parsed.date()).days
+            if days_difference > 3:
+                logger.warning(f"Данные устарели на {days_difference} дней! Последние данные от {last_date_parsed.date()}, текущая дата {current_date.date()}")
+            
+            # Прогноз всегда на следующий день от текущей даты
+            prediction_date = (current_date + timedelta(days=self.config["horizon"])).strftime("%Y-%m-%d")
+            
+            logger.info(f"Прогноз будет сделан на дату: {prediction_date} (следующий день от текущей даты {current_date.date()})")
         except Exception as e:
             logger.error(f"Ошибка при обработке даты: {e}")
-            prediction_date = datetime.now().strftime("%Y-%m-%d")
+            prediction_date = (datetime.now() + timedelta(days=self.config["horizon"])).strftime("%Y-%m-%d")
             
         predictions = {}
 

@@ -1,0 +1,50 @@
+# Файлы с секретами
+.env
+*.env
+*.secret
+
+# Данные и модели
+/data/
+/models/
+/db/
+*.csv
+*.h5
+*.json
+*.joblib
+*.pkl
+*.model
+
+# Бакапы и временные файлы
+*.bak
+*.backup
+*.swp
+*.old
+
+# Кэшированные данные и системные файлы
+__pycache__/
+*.py[cod]
+*$py.class
+.DS_Store
+
+# Логи и временные файлы
+*.log
+logs/
+temp/
+tmp/
+
+# Виртуальное окружение
+venv/
+env/
+ENV/
+
+# IDE файлы
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Исключения - оставляем конфиги без секретов
+!/config/predictor_config.json

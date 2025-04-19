@@ -17,6 +17,8 @@ from datetime import datetime, timedelta
 from data_loader import GoldDataLoader
 from features import FeatureGenerator
 from models import XGBoostModel, LSTMModel, EnsembleModel
+from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV
+import xgboost as xgb
 
 # Настройка логирования
 # --- Создание директории logs, если не существует ---
@@ -102,39 +104,54 @@ def prepare_data(period='5y', target_type='binary', horizon=1, sequence_length=1
     }
 
 
-def train_xgboost_model(data, target_type='binary', params=None):
+def tune_xgboost_hyperparams(X_train, y_train):
     """
-    Обучение модели XGBoost.
-    
-    Args:
-        data (dict): Данные для обучения и тестирования
-        target_type (str): Тип целевой переменной
-        params (dict, optional): Параметры модели
-        
-    Returns:
-        tuple: (xgb_model, metrics)
+    Быстрый RandomizedSearchCV с TimeSeriesSplit для XGBoost.
+    Возвращает лучшие параметры.
+    """
+    logger.info("Запуск RandomizedSearchCV для XGBoost...")
+    param_dist = {
+        'max_depth': [3, 4, 5, 6, 7, 8],
+        'n_estimators': [50, 100, 200, 300],
+        'learning_rate': [0.01, 0.05, 0.1, 0.2],
+        'subsample': [0.7, 0.8, 1.0],
+        'colsample_bytree': [0.7, 0.8, 1.0]
+    }
+    xgb_clf = xgb.XGBClassifier(objective='binary:logistic', use_label_encoder=False, eval_metric='logloss', verbosity=0)
+    tscv = TimeSeriesSplit(n_splits=4)
+    search = RandomizedSearchCV(
+        estimator=xgb_clf,
+        param_distributions=param_dist,
+        n_iter=12,
+        scoring='accuracy',
+        cv=tscv,
+        verbose=2,
+        n_jobs=-1,
+        random_state=42
+    )
+    search.fit(X_train, y_train)
+    logger.info(f"Лучшие параметры XGBoost: {search.best_params_}")
+    logger.info(f"Лучшая кросс-валидационная accuracy: {search.best_score_:.4f}")
+    return search.best_params_
+
+def train_xgboost_model(data, target_type='binary', params=None, tune_hyperparams=True):
+    """
+    Обучение модели XGBoost с возможностью подбора гиперпараметров.
     """
     logger.info("Обучение модели XGBoost")
-    
     X_train, X_val, X_test, y_train, y_val, y_test = data['tabular']
-    
-    # Создаем модель XGBoost
+    # Гиперпараметры по умолчанию
+    best_params = params if params is not None else None
+    if tune_hyperparams:
+        best_params = tune_xgboost_hyperparams(X_train, y_train)
+    # Создаем и обучаем модель с лучшими параметрами
     xgb_model = XGBoostModel(target_type=target_type)
-    
-    # Обновляем параметры, если предоставлены
-    if params is not None:
-        xgb_model.params.update(params)
-    
-    # Обучаем модель
+    if best_params is not None:
+        xgb_model.params.update(best_params)
     xgb_model.train(X_train, y_train, X_val, y_val)
-    
-    # Оцениваем качество на тестовой выборке
     metrics = xgb_model.evaluate(X_test, y_test)
-    
-    # Сохраняем модель
     model_path = xgb_model.save_model()
     logger.info(f"Модель XGBoost сохранена в {model_path}")
-    
     return xgb_model, metrics
 
 
@@ -236,24 +253,28 @@ def main(args):
         logger.error("Не удалось подготовить данные")
         return
     
-    # Обучаем модель XGBoost
-    if args.train_xgboost:
-        xgb_model, xgb_metrics = train_xgboost_model(data, target_type=args.target_type)
-    else:
-        logger.info("Пропускаем обучение XGBoost")
-        xgb_model = None
-    
-    # Обучаем модель LSTM
-    if args.train_lstm:
-        lstm_model, lstm_metrics = train_lstm_model(
-            data, 
-            target_type=args.target_type, 
-            epochs=args.epochs, 
-            batch_size=args.batch_size
+    xgb_model = None
+    lstm_model = None
+    ensemble = None
+    ensemble_metrics = None
+
+    # Унифицированный запуск по --model
+    if args.model == "xgboost" or args.train_xgboost:
+        xgb_model, xgb_metrics = train_xgboost_model(
+            data,
+            target_type=args.target_type,
+            tune_hyperparams=args.tune_hyperparams
         )
-    else:
-        logger.info("Пропускаем обучение LSTM")
-        lstm_model = None
+        logger.info(f"XGBoost метрики: {xgb_metrics}")
+
+    if args.model == "lstm" or args.train_lstm:
+        lstm_model, lstm_metrics = train_lstm_model(
+            data,
+            target_type=args.target_type,
+            epochs=getattr(args, 'epochs', 100),
+            batch_size=getattr(args, 'batch_size', 32)
+        )
+        logger.info(f"LSTM метрики: {lstm_metrics}")
     
     # Создаем ансамбль, если обе модели обучены
     if xgb_model is not None and lstm_model is not None and args.create_ensemble:
@@ -286,8 +307,10 @@ if __name__ == "__main__":
     parser.add_argument("--horizon", type=int, default=1, help="Горизонт прогнозирования (в днях)")
     parser.add_argument("--sequence_length", type=int, default=10, help="Длина последовательности для LSTM")
     
-    parser.add_argument("--train_xgboost", action="store_true", help="Обучать XGBoost модель")
-    parser.add_argument("--train_lstm", action="store_true", help="Обучать LSTM модель")
+    parser.add_argument("--model", type=str, default=None, choices=["xgboost", "lstm"], help="Модель для обучения (xgboost, lstm)")
+    parser.add_argument("--tune_hyperparams", action="store_true", help="Включить автотюнинг гиперпараметров (только для XGBoost)")
+    parser.add_argument("--train_xgboost", action="store_true", help="Обучать XGBoost модель (устарело, используйте --model xgboost)")
+    parser.add_argument("--train_lstm", action="store_true", help="Обучать LSTM модель (устарело, используйте --model lstm)")
     parser.add_argument("--create_ensemble", action="store_true", help="Создать ансамбль моделей")
     
     parser.add_argument("--epochs", type=int, default=100, help="Количество эпох обучения LSTM")
