@@ -149,7 +149,7 @@ class GoldPredictorScheduler:
             result = self.predictor.predict()
             
             if result:
-                logger.info(f"✅ Прогноз успешно сгенерирован на {result.get('prediction_date')}")
+                logger.info(f"✅ Прогноз успешно сгенерирован на {result.get('date', result.get('prediction_date', ''))}")
                 logger.info(f"Направление: {result.get('direction')} с уверенностью {result.get('confidence'):.2f}")
                 
                 # Отправляем сообщение в Telegram

@@ -60,14 +60,21 @@ def get_latest_gold_price():
     Returns:
         tuple: (price: float, date: str, source: str)
     """
-    # Bybit как основной источник
-    price, date_str = get_gold_price_bybit_auth(
-        'vcpsoaLUBwfj1jPfCz',
-        'xf4WxWufuFleJuAjVWXdxRe6WHugoKPbCqQE',
-        'XAUTUSDT'
-    )
-    if price is not None:
-        return price, date_str, "Bybit XAUTUSDT"
+    # Загружаем ключи API из переменных окружения
+    import os
+    from config_loader import load_environment_variables
+    
+    # Загружаем переменные окружения
+    load_environment_variables()
+    
+    api_key = os.getenv('BYBIT_API_KEY', '')
+    api_secret = os.getenv('BYBIT_API_SECRET', '')
+    
+    # Bybit как основной источник (если есть ключи)
+    if api_key and api_secret:
+        price, date_str = get_gold_price_bybit_auth(api_key, api_secret, 'XAUTUSDT')
+        if price is not None:
+            return price, date_str, "Bybit XAUTUSDT"
     # fallback: Yahoo
     price, date_str = get_gold_price_yahoo()
     if price is not None:

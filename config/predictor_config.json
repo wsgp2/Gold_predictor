@@ -2,11 +2,11 @@
     "target_type": "binary",
     "horizon": 1,
     "sequence_length": 10,
-    "xgb_model_path": "models/xgboost_binary_20250419.json",
-    "lstm_model_path": "models/lstm_binary_20250419.h5",
-    "ensemble_info_path": "models/ensemble_binary_20250419.joblib",
-    "telegram_token": "",
-    "telegram_chat_id": "",
+    "xgb_model_path": "xgb_binary_20250419.json",
+    "lstm_model_path": "lstm_binary_20250419.h5",
+    "ensemble_info_path": "",
+    "telegram_token": "7827555043:AAFScXM8OLSkO2xfhiqrhFIy0NN2Tu1udUU",
+    "telegram_chat_id": "-1002564245552",
     "prediction_time": "10:00",
     "verification_time": "10:00"
 }

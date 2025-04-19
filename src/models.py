@@ -418,8 +418,11 @@ class XGBoostModel:
             self.model = xgb.Booster()
             self.model.load_model(file_path)
             
+            # Извлекаем только базовое имя файла без пути для корректной работы с метаданными
+            base_filename = os.path.basename(filename)
+            
             # Сначала пробуем загрузить метаданные (имена признаков и параметры)
-            metadata_file = os.path.join(self.model_dir, f"{os.path.splitext(filename)[0]}_metadata.joblib")
+            metadata_file = os.path.join(self.model_dir, f"{os.path.splitext(base_filename)[0]}_metadata.joblib")
             if os.path.exists(metadata_file):
                 try:
                     metadata = joblib.load(metadata_file)
@@ -442,7 +445,7 @@ class XGBoostModel:
                     logger.error(f"Ошибка при загрузке метаданных: {e}")
             else:
                 # Для обратной совместимости пытаемся загрузить старый формат параметров
-                params_file = os.path.join(self.model_dir, f"{os.path.splitext(filename)[0]}_params.joblib")
+                params_file = os.path.join(self.model_dir, f"{os.path.splitext(base_filename)[0]}_params.joblib")
                 if os.path.exists(params_file):
                     try:
                         self.params = joblib.load(params_file)

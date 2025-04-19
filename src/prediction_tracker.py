@@ -124,7 +124,9 @@ class PredictionTracker:
         # Поиск предсказания для указанной даты
         found = False
         for pred in self.predictions:
-            if pred.get("prediction_date") == prediction_date:
+            # Проверяем оба варианта ключа даты
+            pred_date = pred.get("date", pred.get("prediction_date", ""))
+            if pred_date == prediction_date:
                 # Копируем предсказание и добавляем фактический результат
                 verified_pred = pred.copy()
                 verified_pred["actual_direction"] = actual_direction
@@ -187,7 +189,7 @@ class PredictionTracker:
         )
         
         # Статистика по неделям
-        pred_date = verified_pred.get("prediction_date", "")
+        pred_date = verified_pred.get("date", verified_pred.get("prediction_date", ""))
         if pred_date:
             try:
                 dt = datetime.strptime(pred_date, "%Y-%m-%d")
@@ -291,7 +293,8 @@ class PredictionTracker:
         
         recent_predictions = []
         for pred in self.verified:
-            if pred.get("prediction_date", "") >= cutoff_date:
+            pred_date = pred.get("date", pred.get("prediction_date", ""))
+            if pred_date >= cutoff_date:
                 recent_predictions.append(pred)
             
             # Ограничиваем количество предсказаний для производительности
@@ -311,7 +314,9 @@ class PredictionTracker:
             dict: Предсказание или None, если не найдено
         """
         for pred in self.predictions:
-            if pred.get("prediction_date") == prediction_date:
+            # Проверяем оба варианта ключа даты
+            pred_date = pred.get("date", pred.get("prediction_date", ""))
+            if pred_date == prediction_date:
                 return pred
         
         return None
@@ -327,7 +332,9 @@ class PredictionTracker:
             dict: Проверенное предсказание или None, если не найдено
         """
         for pred in self.verified:
-            if pred.get("prediction_date") == prediction_date:
+            # Проверяем оба варианта ключа даты
+            pred_date = pred.get("date", pred.get("prediction_date", ""))
+            if pred_date == prediction_date:
                 return pred
         
         return None
@@ -369,7 +376,7 @@ class PredictionTracker:
             if recent_preds:
                 report += "\n*Последние предсказания:*\n"
                 for pred in recent_preds[:5]:  # Показываем только 5 последних
-                    date = pred.get("prediction_date", "")
+                    date = pred.get("date", pred.get("prediction_date", ""))
                     is_correct = pred.get("is_correct", False)
                     direction = pred.get("direction", "")
                     

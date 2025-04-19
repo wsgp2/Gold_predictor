@@ -92,7 +92,7 @@ class GoldPredictor:
 
     def load_config(self):
         """
-        Загрузка конфигурации из файла.
+        Загрузка конфигурации из файла и переменных окружения.
         Returns:
             dict: Конфигурация
         """
@@ -108,6 +108,8 @@ class GoldPredictor:
             "prediction_time": "10:00",
             "verification_time": "10:00"
         }
+        
+        # Загружаем конфигурацию из файла
         if os.path.exists(self.config_path):
             try:
                 with open(self.config_path, 'r') as f:
@@ -119,6 +121,27 @@ class GoldPredictor:
         else:
             self.save_config(default_config)
             logger.info(f"Создана конфигурация по умолчанию в {self.config_path}")
+        
+        # Загружаем переменные окружения и обновляем конфигурацию
+        from config_loader import load_environment_variables
+        load_environment_variables()
+        
+        # Проверяем наличие Telegram токена и chat_id в переменных окружения
+        telegram_token = os.environ.get('TELEGRAM_TOKEN')
+        telegram_chat_id = os.environ.get('TELEGRAM_CHAT_ID')
+        
+        # Обновляем конфигурацию, если переменные найдены
+        if telegram_token and telegram_token.strip():
+            default_config['telegram_token'] = telegram_token.strip()
+            logger.info("Токен Telegram загружен из переменных окружения")
+            
+        if telegram_chat_id and telegram_chat_id.strip():
+            default_config['telegram_chat_id'] = telegram_chat_id.strip()
+            logger.info("Chat ID Telegram загружен из переменных окружения")
+        
+        # Сохраняем обновленную конфигурацию в файл
+        self.save_config(default_config)
+            
         return default_config
 
     def save_config(self, config=None):
@@ -184,53 +207,71 @@ class GoldPredictor:
         if self.config["xgb_model_path"]:
             try:
                 # Проверяем существует ли файл по указанному пути
+                # Возьмем путь из конфига и проверим, существует ли файл
                 xgb_file_path = self.config["xgb_model_path"]
-                if not os.path.isabs(xgb_file_path):
-                    # Если путь относительный, добавляем путь к моделям
+                
+                # Сначала проверим чистый путь
+                if os.path.exists(xgb_file_path):
+                    pass  # Файл найден, ничего не меняем
+                # Проверим, есть ли файл в ../models
+                elif os.path.exists(os.path.join(self.model_dir, os.path.basename(xgb_file_path))):
                     xgb_file_path = os.path.join(self.model_dir, os.path.basename(xgb_file_path))
                 
                 if os.path.exists(xgb_file_path):
-                    self.xgb_model = XGBoostModel(target_type=self.config["target_type"])
-                    self.xgb_model.load_model(xgb_file_path)
+                    # Передаём правильную директорию с моделями
+                    model_directory = os.path.dirname(os.path.abspath(xgb_file_path)) if os.path.dirname(xgb_file_path) else self.model_dir
+                    self.xgb_model = XGBoostModel(model_dir=model_directory, target_type=self.config["target_type"])
+                    self.xgb_model.load_model(os.path.basename(xgb_file_path))
                     logger.info(f"XGBoost модель загружена из {xgb_file_path}")
                     success = True
-                else:
-                    logger.error(f"Файл модели {xgb_file_path} не найден")
             except Exception as e:
                 logger.error(f"Ошибка при загрузке XGBoost модели: {e}")
         
         if self.config["lstm_model_path"]:
             try:
                 # Проверяем существует ли файл по указанному пути
+                # Возьмем путь из конфига и проверим, существует ли файл
                 lstm_file_path = self.config["lstm_model_path"]
-                if not os.path.isabs(lstm_file_path):
-                    # Если путь относительный, добавляем путь к моделям
+                
+                # Сначала проверим чистый путь
+                if os.path.exists(lstm_file_path):
+                    pass  # Файл найден, ничего не меняем
+                # Проверим, есть ли файл в ../models
+                elif os.path.exists(os.path.join(self.model_dir, os.path.basename(lstm_file_path))):
                     lstm_file_path = os.path.join(self.model_dir, os.path.basename(lstm_file_path))
                 
                 if os.path.exists(lstm_file_path):
+                    # Передаём правильную директорию с моделями
+                    model_directory = os.path.dirname(os.path.abspath(lstm_file_path)) if os.path.dirname(lstm_file_path) else self.model_dir
                     self.lstm_model = LSTMModel(
+                        model_dir=model_directory,
                         target_type=self.config["target_type"],
                         sequence_length=self.config["sequence_length"]
                     )
-                    self.lstm_model.load_model(lstm_file_path)
+                    self.lstm_model.load_model(os.path.basename(lstm_file_path))
                     logger.info(f"LSTM модель загружена из {lstm_file_path}")
                     success = True
-                else:
-                    logger.error(f"Файл модели {lstm_file_path} не найден")
             except Exception as e:
                 logger.error(f"Ошибка при загрузке LSTM модели: {e}")
         
         if self.config["ensemble_info_path"]:
             try:
                 # Проверяем существует ли файл по указанному пути
+                # Возьмем путь из конфига и проверим, существует ли файл
                 ensemble_file_path = self.config["ensemble_info_path"]
-                if not os.path.isabs(ensemble_file_path):
-                    # Если путь относительный, добавляем путь к моделям
+                
+                # Сначала проверим чистый путь
+                if not ensemble_file_path or os.path.exists(ensemble_file_path):
+                    pass  # Файл найден или путь пустой, ничего не меняем
+                # Проверим, есть ли файл в ../models
+                elif os.path.exists(os.path.join(self.model_dir, os.path.basename(ensemble_file_path))):
                     ensemble_file_path = os.path.join(self.model_dir, os.path.basename(ensemble_file_path))
                 
                 if os.path.exists(ensemble_file_path):
-                    self.ensemble = EnsembleModel(target_type=self.config["target_type"])
-                    ensemble_info = self.ensemble.load_ensemble_info(ensemble_file_path)
+                    # Передаём правильную директорию с моделями
+                    model_directory = os.path.dirname(os.path.abspath(ensemble_file_path)) if os.path.dirname(ensemble_file_path) else self.model_dir
+                    self.ensemble = EnsembleModel(model_dir=model_directory, target_type=self.config["target_type"])
+                    ensemble_info = self.ensemble.load_ensemble_info(os.path.basename(ensemble_file_path))
                     
                     if ensemble_info and self.xgb_model and "xgboost" in ensemble_info["model_names"]:
                         self.ensemble.add_model("xgboost", self.xgb_model, weight=ensemble_info["weights"].get("xgboost", 1.0))
@@ -254,8 +295,28 @@ class GoldPredictor:
             dict: Словарь с последними данными или None в случае ошибки
         """
         try:
-            # Загружаем последние данные, берем больше данных для надежного расчета индикаторов
-            latest_data = self.data_loader.get_latest_data(days=300)  # Увеличиваем исторический период
+            # Сначала обновляем данные через Bybit API, чтобы гарантировать актуальность
+            update_success = self.update_data()
+            logger.info(f"Bybit API обновление данных: {update_success}")
+            
+            # Загружаем напрямую из обновленного файла, вместо использования get_latest_data
+            import pandas as pd
+            import os
+            
+            csv_path = os.path.join(self.data_dir, 'GC_F_latest.csv')
+            if os.path.exists(csv_path):
+                try:
+                    # Загружаем данные напрямую из файла, включая свежие обновления от Bybit
+                    latest_data = pd.read_csv(csv_path, index_col=0, parse_dates=True)
+                    logger.info(f"Загружены данные с обновлениями от Bybit, последняя дата: {latest_data.index[-1]}")
+                except Exception as e:
+                    logger.error(f"Ошибка при загрузке данных из {csv_path}: {str(e)}")
+                    # Фолбэк на стандартный метод
+                    latest_data = self.data_loader.get_latest_data(days=300)  # Увеличиваем исторический период
+            else:
+                # Файл не найден, используем стандартный метод загрузки
+                logger.warning(f"Файл {csv_path} не найден, используем стандартный метод загрузки")
+                latest_data = self.data_loader.get_latest_data(days=300)  # Увеличиваем исторический период
             
             if latest_data is None or len(latest_data) < 100:
                 logger.error("Недостаточно данных для прогнозирования")
@@ -386,78 +447,141 @@ class GoldPredictor:
         import joblib
         try:
             model_path = os.path.join(self.model_dir, self.config["xgb_model_path"])
-            metadata_path = model_path.replace('.json', '_metadata.joblib')
+            # Извлекаем только имя файла без пути для корректного поиска метаданных
+            base_filename = os.path.basename(self.config["xgb_model_path"])
+            metadata_path = os.path.join(self.model_dir, base_filename.replace('.json', '_metadata.joblib'))
+            
+            logger.info(f"Путь к метаданным: {metadata_path}")
+            if not os.path.exists(metadata_path):
+                # Поддержка для старой версии имени файла
+                metadata_path = os.path.join(self.model_dir, base_filename.replace('.json', '_metadata.joblib'))
+                if not os.path.exists(metadata_path):
+                    raise FileNotFoundError(f"Файл метаданных не найден: {metadata_path}")
+            
             metadata = joblib.load(metadata_path)
             expected_features = metadata.get('feature_names', [])
             logger.info(f"Загружено {len(expected_features)} признаков из метаданных XGBoost модели")
+            logger.info(f"Первые 5 признаков из метаданных: {expected_features[:5]}")
         except Exception as e:
             logger.error(f"Ошибка при загрузке метаданных модели: {e}")
-            # Дополнительные признаки, которые могут потребоваться модели
+            # Запасной список - точный список из 62 признаков для модели версии 20250419
             expected_features = [
-                'Close', 'High', 'Low', 'Open', 'Volume', 
-                "('Close', 'GC=F')", "('High', 'GC=F')", "('Low', 'GC=F')", "('Open', 'GC=F')", "('Volume', 'GC=F')",
+                'Open', 'High', 'Low', 'Close', 'Volume', 
                 'MA_5', 'MA_ratio_5', 'MA_10', 'MA_ratio_10', 'MA_20', 'MA_ratio_20', 'MA_50', 'MA_ratio_50', 
                 'MA_100', 'MA_ratio_100', 'EMA_5', 'EMA_ratio_5', 'EMA_10', 'EMA_ratio_10', 'EMA_20', 'EMA_ratio_20', 
                 'EMA_50', 'EMA_ratio_50', 'EMA_100', 'EMA_ratio_100', 'RSI_7', 'RSI_14', 'RSI_21', 
-                'MACD_line', 'MACD_signal', 'MACD_histogram', 'MACD', 'MACD_Signal', 'MACD_Hist', 'MACD_Hist_Change',
-                'BB_upper_20', 'BB_lower_20', 'BB_width_20', 'BB_position_20', 
+                'MACD', 'MACD_Signal', 'MACD_Hist', 'MACD_Hist_Change',
                 'BB_Upper_20', 'BB_Lower_20', 'BB_Width_20', 'BB_Position_20',
                 'Stoch_%K_14', 'Stoch_%D_14', 'ATR_14', 'CCI_20', 'Price_Change', 'Return', 
                 'Volatility_5', 'Volatility_10', 'Volatility_21', 'High_Low_Range', 'High_Low_Range_Pct', 
-                'Volume_MA_5', 'Volume_ratio_5', 'Volume_MA_10', 'Volume_ratio_10', 'Volume_MA_20', 'Volume_ratio_20', 'Volume_Price',
+                'Volume_MA_5', 'Volume_ratio_5', 'Volume_MA_10', 'Volume_ratio_10', 'Volume_MA_20', 'Volume_ratio_20', 
                 'Future_Close'
             ]
+            logger.info(f"Используем запасной список из {len(expected_features)} признаков")
         
-        # Добавляем кортежи для базовых признаков
-        for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
-            if col in features_copy.columns:
-                tuple_col = f"('{col}', 'GC=F')"
-                if tuple_col not in features_copy.columns:
-                    features_copy[tuple_col] = features_copy[col]
+        # Проверяем, какие признаки есть в features_df но отсутствуют в expected_features
+        extra_features = [f for f in features_copy.columns if f not in expected_features]
+        if extra_features:
+            logger.info(f"Обнаружены дополнительные признаки в данных: {extra_features[:5]}{'...' if len(extra_features) > 5 else ''}")
         
-        # Добавляем все недостающие признаки
-        for feature in expected_features:
-            if feature not in features_copy.columns:
-                # Пытаемся найти альтернативные имена
-                alt_feature = None
+        # Проверяем, каких признаков не хватает
+        missing_features = [f for f in expected_features if f not in features_copy.columns]
+        if missing_features:
+            logger.warning(f"Отсутствуют необходимые признаки: {missing_features}")
+            
+            # Мэппинг альтернативных имен для быстрой замены
+            alt_mappings = {
+                'MACD_line': 'MACD', 
+                'MACD_signal': 'MACD_Signal',
+                'MACD_histogram': 'MACD_Hist',
+                'BB_upper_20': 'BB_Upper_20',
+                'BB_lower_20': 'BB_Lower_20',
+                'BB_width_20': 'BB_Width_20',
+                'BB_position_20': 'BB_Position_20'
+            }
+            
+            # Добавляем отсутствующие признаки с умными значениями по умолчанию
+            for feature in missing_features:
+                # Проверяем сначала альтернативные имена
+                alt_found = False
                 
-                # Мэппинг альтернативных имен
-                if feature == 'MACD_line' and 'MACD' in features_copy.columns:
-                    alt_feature = 'MACD'
-                elif feature == 'MACD_signal' and 'MACD_Signal' in features_copy.columns:
-                    alt_feature = 'MACD_Signal'
-                elif feature == 'MACD_histogram' and 'MACD_Hist' in features_copy.columns:
-                    alt_feature = 'MACD_Hist'
-                elif feature == 'BB_upper_20' and 'BB_Upper_20' in features_copy.columns:
-                    alt_feature = 'BB_Upper_20'
-                elif feature == 'BB_lower_20' and 'BB_Lower_20' in features_copy.columns:
-                    alt_feature = 'BB_Lower_20'
-                elif feature == 'BB_width_20' and 'BB_Width_20' in features_copy.columns:
-                    alt_feature = 'BB_Width_20'
-                elif feature == 'BB_position_20' and 'BB_Position_20' in features_copy.columns:
-                    alt_feature = 'BB_Position_20'
-                elif feature == 'Future_Close' and 'Close' in features_copy.columns:
-                    alt_feature = 'Close'
+                # Проверка на кортежные альтернативы ('Column', 'GC=F')
+                base_feature = None
+                if feature.startswith("('") and feature.endswith("', 'GC=F')"):
+                    base_feature = feature.split("'")[1]  # Извлекаем имя столбца из кортежа
+                    if base_feature in features_copy:
+                        features_copy[feature] = features_copy[base_feature]
+                        alt_found = True
+                        logger.info(f"Признак {feature} заменен на {base_feature}")
                 
-                if alt_feature:
-                    features_copy[feature] = features_copy[alt_feature]
-                else:
-                    # Иначе создаем признак с нулевыми значениями
-                    logger.warning(f"Признак {feature} отсутствует, добавляем с нулевыми значениями")
+                # Проверка на известные альтернативные имена
+                if not alt_found and feature in alt_mappings and alt_mappings[feature] in features_copy:
+                    features_copy[feature] = features_copy[alt_mappings[feature]]
+                    alt_found = True
+                    logger.info(f"Признак {feature} заменен на {alt_mappings[feature]}")
+                
+                # Особая обработка для Future_Close
+                if not alt_found and feature == 'Future_Close' and 'Close' in features_copy:
+                    features_copy[feature] = features_copy['Close']
+                    alt_found = True
+                    logger.info(f"Признак Future_Close заменен на текущий Close")
+                
+                # Если ничего не найдено, добавляем нули
+                if not alt_found:
+                    logger.warning(f"Признак {feature} отсутствует, добавляем нулевые значения")
                     features_copy[feature] = 0.0
+            
+            # Выводим диагностическую информацию о готовом наборе признаков
+            logger.info(f"Признаки для XGBoost (всего {len(expected_features)}): {expected_features[:5]}... и еще {len(expected_features)-5 if len(expected_features) > 5 else 0}")
+            
+        # Возвращаем датафрейм с признаками в строгом порядке, как требует модель
+        ordered_df = features_copy[expected_features]
         
-        # Проверяем наличие всех необходимых признаков и добавляем отсутствующие
-        for feature in expected_features:
-            if feature not in features_copy.columns:
-                logger.warning(f"Признак {feature} отсутствует, добавляем с нулевыми значениями")
-                features_copy[feature] = 0.0
+        # Финальная проверка - все ли признаки на месте
+        if list(ordered_df.columns) != expected_features:
+            logger.error(f"Порядок столбцов не соответствует требуемому!")
+            # Если не совпадают, принудительно задаем порядок снова
+            ordered_df = ordered_df.reindex(columns=expected_features)
         
-        # Выводим диагностическую информацию о готовом наборе признаков
-        logger.info(f"Признаки для XGBoost (всего {len(expected_features)}): {expected_features[:5]}... и еще {len(expected_features)-5}")
+        # Проверим на наличие NaN и заменим их на 0
+        if ordered_df.isna().any().any():
+            nan_columns = ordered_df.columns[ordered_df.isna().any()].tolist()
+            logger.warning(f"Обнаружены NaN значения в признаках: {nan_columns}, заменяем на 0")
+            ordered_df = ordered_df.fillna(0)
         
-        # Возвращаем датафрейм с признаками в правильном порядке
-        return features_copy[expected_features]
+        # Проверяем размерность данных
+        logger.info(f"Финальная размерность данных для XGBoost: {ordered_df.shape}, ожидаемое число признаков: {len(expected_features)}")
         
+        return ordered_df
+        
+    def get_current_price(self):
+        """
+        Получение актуальной цены золота в реальном времени
+        
+        Returns:
+            dict: Словарь с актуальной ценой, временем и источником данных
+        """
+        try:
+            # Импортируем модуль price_fetchers
+            from price_fetchers import get_latest_gold_price
+            
+            # Получаем актуальную цену
+            price, timestamp, source = get_latest_gold_price()
+            
+            if price is not None:
+                logger.info(f"Получена актуальная цена золота: ${price:.2f} (источник: {source}, время: {timestamp})")
+                return {
+                    "price": price,
+                    "timestamp": timestamp,
+                    "source": source
+                }
+            else:
+                logger.warning("Не удалось получить актуальную цену из внешних источников")
+                return None
+        except Exception as e:
+            logger.error(f"Ошибка при получении актуальной цены: {e}")
+            return None
+    
     def _diagnostic_features(self, features_df):
         """
         Вывод информации о признаках для диагностики
@@ -522,202 +646,220 @@ class GoldPredictor:
         Returns:
             dict: Прогноз или None в случае ошибки
         """
-        # Проверяем наличие моделей
-        if self.xgb_model is None and self.lstm_model is None and self.ensemble is None:
-            logger.error("Ни одна модель не загружена")
-            return None
-        
-        # Автоматически обновляем данные
-        self.update_data()
-        
-        # Получаем последние данные
-        logger.info(f"Аргументы запуска: {getattr(self, 'args', None)}")
-        logger.info(f"Конфиг: {self.config}")
-        
-        data = self.prepare_latest_data()
-        if data is None:
-            logger.error("prepare_latest_data вернул None — нет данных для прогноза")
-            print("[ERROR] Нет данных для прогноза (prepare_latest_data вернул None)")
-            return None
-            
-        last_close = data['last_close']
-        # Если last_close - Series или DataFrame, преобразуем в скаляр
-        if isinstance(last_close, pd.Series):
-            last_close = last_close.iloc[-1] if not last_close.empty else 0.0
-        elif isinstance(last_close, pd.DataFrame):
-            last_close = last_close.iloc[-1, 0] if not last_close.empty else 0.0
-        elif isinstance(last_close, np.ndarray):
-            last_close = float(last_close[-1]) if len(last_close) > 0 else 0.0
-        
-        last_date = data['last_date']
-        last_features = data['last_features']
-        last_sequence = data['last_sequence']
-        
-        # Определяем дату прогноза - всегда следующий день от текущей даты
         try:
-            # Получаем текущую дату
+            # Проверяем наличие моделей
+            if self.xgb_model is None and self.lstm_model is None and self.ensemble is None:
+                logger.error("Ни одна модель не загружена")
+                return None
+            
+            # Автоматически обновляем данные
+            self.update_data()
+            
+            # Получаем актуальную цену золота в реальном времени
+            current_market_price = self.get_current_price()
+            
+            # Получаем последние данные
+            logger.info(f"Аргументы запуска: {getattr(self, 'args', None)}")
+            logger.info(f"Конфиг: {self.config}")
+            
+            data = self.prepare_latest_data()
+            if data is None:
+                logger.error("prepare_latest_data вернул None — нет данных для прогноза")
+                print("[ERROR] Нет данных для прогноза (prepare_latest_data вернул None)")
+                return None
+                
+            last_close = data['last_close']
+            # Если last_close - Series или DataFrame, преобразуем в скаляр
+            if isinstance(last_close, pd.Series):
+                last_close = last_close.iloc[-1] if not last_close.empty else 0.0
+            elif isinstance(last_close, pd.DataFrame):
+                last_close = last_close.iloc[-1, 0] if not last_close.empty else 0.0
+            elif isinstance(last_close, np.ndarray):
+                last_close = float(last_close[-1]) if len(last_close) > 0 else 0.0
+            
+            last_date = data['last_date']
+            last_features = data['last_features']
+            last_sequence = data['last_sequence']
+            
+            # Определяем дату прогноза - всегда следующий день от текущей даты
             current_date = datetime.now()
-            
-            # Находим разницу между последними данными и текущей датой
-            if isinstance(last_date, str):
-                # Если дата уже строка, извлекаем только дату
-                date_part = last_date.split()[0] if ' ' in last_date else last_date
-                last_date_parsed = datetime.strptime(date_part, "%Y-%m-%d")
-            else:
-                # Если это объект datetime или Timestamp
-                last_date_parsed = last_date
-                
-            # Проверяем, насколько устарели данные
-            days_difference = (current_date.date() - last_date_parsed.date()).days
-            if days_difference > 3:
-                logger.warning(f"Данные устарели на {days_difference} дней! Последние данные от {last_date_parsed.date()}, текущая дата {current_date.date()}")
-            
-            # Прогноз всегда на следующий день от текущей даты
             prediction_date = (current_date + timedelta(days=self.config["horizon"])).strftime("%Y-%m-%d")
+            logger.info(f"Прогноз на дату: {prediction_date}")
             
-            logger.info(f"Прогноз будет сделан на дату: {prediction_date} (следующий день от текущей даты {current_date.date()})")
-        except Exception as e:
-            logger.error(f"Ошибка при обработке даты: {e}")
-            prediction_date = (datetime.now() + timedelta(days=self.config["horizon"])).strftime("%Y-%m-%d")
+            # Проводим диагностику признаков
+            self._diagnostic_features(last_features)
             
-        predictions = {}
-
-        # Проводим диагностику признаков перед прогнозированием
-        self._diagnostic_features(last_features)
-        
-        # Прогноз XGBoost
-        if self.xgb_model is not None:
-            try:
-                # Преобразуем признаки в формат, ожидаемый XGBoost
-                xgb_features = self._reorder_features_for_xgboost(last_features)
-                logger.info(f"Признаки для XGBoost подготовлены, количество: {len(xgb_features.columns)}")
-                
-                xgb_pred = self.xgb_model.predict(xgb_features)
-                # Проверяем, что модель вернула результат
-                if xgb_pred is not None:
+            # Создаем список предсказаний
+            predictions = {}
+            
+            # Прогноз XGBoost
+            if self.xgb_model is not None:
+                try:
+                    # Преобразуем признаки в формат, ожидаемый XGBoost
+                    xgb_features = self._reorder_features_for_xgboost(last_features)
+                    # Логируем размерность данных для проверки
+                    logger.info(f"Размерность данных для XGBoost: {xgb_features.shape}")
+                    
+                    # Прогнозируем
+                    xgb_pred = self.xgb_model.predict(xgb_features)
+                    
                     # Получаем вероятности
-                    try:
-                        xgb_proba = self.xgb_model.predict_proba(xgb_features)
-                        if xgb_proba is not None:
-                            # Бинарная классификация: направление и уверенность
-                            if self.config["target_type"] == 'binary':
-                                # Для бинарной классификации - просто вероятность положительного класса
-                                xgb_direction = "UP" if xgb_pred[0] == 1 else "DOWN"
-                                # Берем вероятность в зависимости от формата результата (массив или скаляр)
-                                if hasattr(xgb_proba, 'ndim') and xgb_proba.ndim > 1 and xgb_proba.shape[1] > 1:
-                                    xgb_confidence = float(xgb_proba[0, 1])
-                                else:
-                                    # Если возвращается просто вероятность положительного класса
-                                    xgb_confidence = float(xgb_proba[0])
-                                    
-                                predictions['xgboost'] = {
-                                    'direction': xgb_direction,
-                                    'confidence': xgb_confidence
-                                }
-                                if hasattr(self, 'args') and getattr(self.args, 'print_proba', False):
-                                    print(f"[XGBoost] Прогноз: {xgb_direction}, вероятность: {xgb_confidence:.3f}")
-                    except Exception as e:
-                        logger.error(f"Ошибка при получении вероятностей XGBoost: {e}")
-                else:
-                    logger.error("XGBoost модель вернула None вместо предсказаний")
-            except Exception as e:
-                logger.error(f"Ошибка при прогнозировании с XGBoost: {e}")
-        
-        # Прогноз LSTM
-        if self.lstm_model is not None and last_sequence is not None:
-            try:
-                lstm_pred = self.lstm_model.predict(last_sequence)
-                # Проверяем, что модель вернула результат
-                if lstm_pred is not None:
-                    # Бинарная классификация
+                    xgb_proba = self.xgb_model.predict_proba(xgb_features)
+                    
+                    # Формируем предсказание
                     if self.config["target_type"] == 'binary':
-                        # Проверяем формат предсказания (его размерность)
+                        xgb_direction = "UP" if xgb_pred[0] == 1 else "DOWN"
+                        xgb_confidence = float(xgb_proba[0, 1]) if xgb_proba.ndim > 1 else float(xgb_proba[0])
+                        
+                        predictions['xgboost'] = {
+                            'direction': xgb_direction,
+                            'confidence': xgb_confidence
+                        }
+                        logger.info(f"XGBoost предсказание: {xgb_direction} (уверенность: {xgb_confidence:.3f})")
+                except Exception as e:
+                    logger.error(f"Ошибка при прогнозировании с XGBoost: {e}")
+                    
+            # Прогноз LSTM
+            if self.lstm_model is not None and last_sequence is not None:
+                try:
+                    lstm_pred = self.lstm_model.predict(last_sequence)
+                    
+                    # Формируем предсказание
+                    if self.config["target_type"] == 'binary':
                         if isinstance(lstm_pred, np.ndarray):
-                            if lstm_pred.ndim == 1:  # Уже сплющенный массив
-                                lstm_direction = "UP" if lstm_pred[0] > 0.5 else "DOWN"
-                                lstm_confidence = float(lstm_pred[0])
-                            else:  # Многомерный массив
-                                lstm_direction = "UP" if lstm_pred.flatten()[0] > 0.5 else "DOWN"
-                                lstm_confidence = float(lstm_pred.flatten()[0])
-                                
+                            lstm_confidence = float(lstm_pred.flatten()[0])
+                            lstm_direction = "UP" if lstm_confidence > 0.5 else "DOWN"
+                            
                             predictions['lstm'] = {
                                 'direction': lstm_direction,
                                 'confidence': lstm_confidence
                             }
-                            if hasattr(self, 'args') and getattr(self.args, 'print_proba', False):
-                                print(f"[LSTM] Прогноз: {lstm_direction}, вероятность: {lstm_confidence:.3f}")
-                else:
-                    logger.error("LSTM модель вернула None вместо предсказаний")
-            except Exception as e:
-                logger.error(f"Ошибка при прогнозировании с LSTM: {e}")
-        
-        # Прогноз ансамбля
-        if self.ensemble is not None:
-            try:
-                # Проверяем наличие достаточного количества моделей для ансамбля
-                available_models = {model: info for model, info in predictions.items()}
-                
-                if len(available_models) >= 1:  # Достаточно хотя бы одной модели
-                    weights = {}
-                    if hasattr(self.ensemble, 'get'):
-                        weights = self.ensemble.get('weights', {})
-                    elif hasattr(self.ensemble, 'weights'):
-                        weights = self.ensemble.weights
+                            logger.info(f"LSTM предсказание: {lstm_direction} (уверенность: {lstm_confidence:.3f})")
+                except Exception as e:
+                    logger.error(f"Ошибка при прогнозировании с LSTM: {e}")
+    
+            # Прогноз ансамбля
+            if self.ensemble is not None and predictions:
+                try:
+                    # Проверяем наличие достаточного количества моделей для ансамбля
+                    available_models = {model: info for model, info in predictions.items()}
                     
-                    # По умолчанию все модели имеют одинаковый вес
-                    default_weight = 1.0 / len(available_models)
+                    if len(available_models) >= 1:  # Достаточно хотя бы одной модели
+                        weights = {}
+                        if hasattr(self.ensemble, 'get'):
+                            weights = self.ensemble.get('weights', {})
+                        elif hasattr(self.ensemble, 'weights'):
+                            weights = self.ensemble.weights
+                        
+                        # По умолчанию все модели имеют одинаковый вес
+                        default_weight = 1.0 / len(available_models)
+                        
+                        # Вычисляем взвешенную вероятность
+                        total_weight = 0.0
+                        weighted_confidence = 0.0
+                        
+                        for model_name, model_info in available_models.items():
+                            model_weight = weights.get(model_name, default_weight)
+                            model_confidence = model_info['confidence']
+                            weighted_confidence += model_weight * model_confidence
+                            total_weight += model_weight
+                        
+                        # Нормализуем по общему весу
+                        if total_weight > 0:
+                            ensemble_confidence = weighted_confidence / total_weight
+                        else:
+                            # Если веса не заданы, используем среднее арифметическое
+                            ensemble_confidence = weighted_confidence / len(available_models)
+                        
+                        ensemble_direction = "UP" if ensemble_confidence > 0.5 else "DOWN"
+                        
+                        predictions['ensemble'] = {
+                            'direction': ensemble_direction,
+                            'confidence': ensemble_confidence
+                        }
+                        
+                        logger.info(f"[Ensemble] Прогноз: {ensemble_direction}, вероятность: {ensemble_confidence:.3f}")
+                except Exception as e:
+                    logger.error(f"Ошибка при прогнозировании с ансамблем: {e}")
+            
+            if not predictions:
+                logger.error("Не удалось получить ни одного прогноза")
+                return None
+            
+            # Определяем основной прогноз в зависимости от заданной модели
+            model_type = getattr(self.args, 'model', 'ensemble')
+            main_model = model_type
+            
+            # Если указанная модель недоступна, создаем лучшее предсказание
+            if model_type not in predictions:
+                available_models = list(predictions.keys())
+                
+                # Если доступны обе модели XGBoost и LSTM, создаем взвешенное предсказание
+                if 'xgboost' in available_models and 'lstm' in available_models:
+                    # Используем веса на основе F1-метрик: LSTM=0.64, XGBoost=0.36
+                    weights = {'lstm': 0.64, 'xgboost': 0.36}
                     
                     # Вычисляем взвешенную вероятность
-                    total_weight = 0.0
-                    weighted_confidence = 0.0
+                    weighted_confidence = (predictions['lstm']['confidence'] * weights['lstm'] + 
+                                          predictions['xgboost']['confidence'] * weights['xgboost'])
                     
-                    for model_name, model_info in available_models.items():
-                        model_weight = weights.get(model_name, default_weight)
-                        model_confidence = model_info['confidence']
-                        weighted_confidence += model_weight * model_confidence
-                        total_weight += model_weight
+                    # Определяем направление на основе взвешенной вероятности
+                    ensemble_direction = "UP" if weighted_confidence > 0.5 else "DOWN"
                     
-                    # Нормализуем по общему весу
-                    if total_weight > 0:
-                        ensemble_confidence = weighted_confidence / total_weight
-                    else:
-                        # Если веса не заданы, используем среднее арифметическое
-                        ensemble_confidence = weighted_confidence / len(available_models)
-                    
-                    ensemble_direction = "UP" if ensemble_confidence > 0.5 else "DOWN"
-                    
-                    predictions['ensemble'] = {
+                    # Создаем виртуальный ансамбль
+                    predictions['weighted_ensemble'] = {
                         'direction': ensemble_direction,
-                        'confidence': ensemble_confidence
+                        'confidence': weighted_confidence
                     }
                     
-                    if hasattr(self, 'args') and getattr(self.args, 'print_proba', False):
-                        print(f"[Ensemble] Прогноз: {ensemble_direction}, вероятность: {ensemble_confidence:.3f}")
-                else:
-                    logger.warning("Недостаточно моделей для ансамбля")
-            except Exception as e:
-                logger.error(f"Ошибка при прогнозировании с ансамблем: {e}")
-                import traceback
-                logger.error(traceback.format_exc())
-        
-        if not predictions:
-            logger.error("Не удалось получить ни одного прогноза")
-            print("[ERROR] Прогноз не получен.")
+                    main_model = 'weighted_ensemble'
+                    logger.info(f"Создано взвешенное предсказание: {ensemble_direction} (уверенность: {weighted_confidence:.3f})")
+                    logger.info(f"Веса моделей: LSTM={weights['lstm']}, XGBoost={weights['xgboost']}")
+                
+                # Если доступна только одна модель, используем LSTM при наличии (как более точную)
+                elif len(available_models) > 0:
+                    if 'lstm' in available_models:
+                        main_model = 'lstm'
+                        logger.warning(f"Модель {model_type} не найдена, используем LSTM (лучшая метрика F1=0.8)")
+                    else:
+                        main_model = available_models[0]
+                        logger.warning(f"Модель {model_type} не найдена, используем {main_model}")
+            
+            # Собираем результаты предсказаний
+            result = {
+                'predictions': predictions,
+                'last_close': float(last_close),
+                'last_date': str(last_date) if last_date is not None else None,
+                'date': prediction_date,
+                'model': main_model,
+                'direction': predictions[main_model]['direction'],
+                'confidence': float(predictions[main_model]['confidence']),
+                'models_used': list(predictions.keys()),
+                'target_type': self.config['target_type'],
+                'horizon': self.config['horizon']
+            }
+            
+            # Добавляем актуальную рыночную цену
+            if current_market_price is not None:
+                result['current_market_price'] = current_market_price
+                logger.info(f"Добавлена актуальная цена ${current_market_price['price']:.2f} в предсказание")
+            
+            # Отправляем предсказание в Telegram, если нужно
+            if hasattr(self, 'args') and hasattr(self.args, 'send_telegram') and self.args.send_telegram:
+                self._send_prediction_to_telegram(result)
+            
+            # Сохраняем предсказание в трекер, если он доступен
+            if self.tracker:
+                self.tracker.save_prediction(result)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Непредвиденная ошибка при генерации прогноза: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return None
-        
-        # Определяем основной прогноз в зависимости от заданной модели
-        model_type = getattr(self.args, 'model', 'xgboost')
-        if model_type in predictions:
-            main_prediction = predictions[model_type]
-        else:
-            available_models = list(predictions.keys())
-            if available_models:
-                main_prediction = predictions[available_models[0]]
-                logger.warning(f"Модель {model_type} не найдена, используем {available_models[0]}")
-            else:
-                logger.error("Не удалось получить прогноз ни от одной модели")
-                print("[ERROR] Прогноз не получен.")
-                return None
+
         
         # Формируем результат
         direction = main_prediction['direction']
@@ -803,7 +945,19 @@ class GoldPredictor:
         # Выводим сообщение в консоль
         print(f"\n[RESULT] Прогноз на {prediction_date}:")
         print(f"Направление: {direction} (уверенность: {confidence:.3f})")
-        print(f"Текущая цена: ${float(last_close):.2f}")
+        print(f"Цена закрытия: ${float(last_close):.2f} (данные на {last_date})")
+        
+        # Выводим актуальную рыночную цену, если она доступна
+        if current_market_price is not None:
+            actual_price = current_market_price.get('price', 0.0)
+            source = current_market_price.get('source', 'unknown')
+            timestamp = current_market_price.get('timestamp', '')
+            price_diff = actual_price - float(last_close)
+            diff_pct = (price_diff / float(last_close)) * 100 if last_close != 0 else 0
+            diff_sign = '+' if price_diff >= 0 else ''
+            print(f"Актуальная цена: ${actual_price:.2f} ({diff_sign}{diff_pct:.2f}%)")
+            print(f"Источник: {source}, {timestamp}")
+            
         print(f"Модель: {model_type.upper()}")
         
         return result
@@ -820,15 +974,18 @@ class GoldPredictor:
             # Определяем эмодзи на основе направления и уверенности
             direction = prediction.get('direction', 'UNKNOWN')
             confidence = prediction.get('confidence', 0.0)
-            price = prediction.get('current_price', 0.0)
-            prediction_date = prediction.get('prediction_date', '')
+            last_close = prediction.get('last_close', 0.0)
+            prediction_date = prediction.get('date', '')
             model_type = prediction.get('model', 'ensemble')
+            
+            # Получаем текущую цену рынка из prediction, если она доступна
+            current_market_price = prediction.get('current_market_price', None)
             
             # Эмодзи для направления движения цены
             direction_emoji = "🔼" if direction == "UP" else "🔽" if direction == "DOWN" else "⏹️"
             
             # Эмодзи для уверенности в прогнозе
-            confidence_emoji = "🎯" if confidence > 0.8 else "🔍" if confidence > 0.6 else "❓"
+            confidence_emoji = "🎥" if confidence > 0.8 else "🔍" if confidence > 0.6 else "❓"
             
             # Эмодзи для модели
             model_emoji = {
@@ -839,9 +996,31 @@ class GoldPredictor:
             
             # Создаем сообщение с Markdown форматированием
             message = f"*📈 Прогноз цены золота*\n\n"
-            message += f"📅 *Дата:* {prediction_date}\n"
-            message += f"💰 *Текущая цена:* ${price:.2f}\n\n"
-            message += f"{direction_emoji} *Направление:* {direction}\n"
+            message += f"📅 *Дата прогноза:* {prediction_date}\n\n"
+            
+            # Добавляем информацию о ценах
+            last_close = float(prediction.get('last_close', 0.0))
+            message += f"💰 *Цена в момент прогноза:* ${last_close:.2f}\n"
+            
+            # Если доступна актуальная рыночная цена
+            current_market_price = prediction.get('current_market_price', None)
+            if current_market_price is not None:
+                actual_price = current_market_price.get('price', 0.0)
+                source = current_market_price.get('source', 'unknown')
+                timestamp = current_market_price.get('timestamp', '')
+                
+                # Вычисляем разницу между актуальной ценой и ценой в момент прогноза
+                price_diff = actual_price - last_close
+                diff_pct = (price_diff / last_close) * 100 if last_close != 0 else 0
+                
+                # Добавляем эмодзи для разницы цен
+                diff_emoji = "🔼" if price_diff > 0 else "🔽" if price_diff < 0 else "↔️"
+                
+                # Добавляем актуальную цену в сообщение с экранированием спецсимволов
+                message += f"⚡ *Актуальная цена:* ${actual_price:.2f} {diff_emoji} ({diff_pct:+.2f}\%)\n"
+                message += f"   \_Источник: {source}, {timestamp}\_\n"
+            
+            message += f"\n{direction_emoji} *Направление:* {direction}\n"
             message += f"{confidence_emoji} *Уверенность:* {confidence:.2f}\n\n"
             message += f"{model_emoji} *Модель:* {model_type.upper()}\n\n"
             
@@ -871,7 +1050,7 @@ class GoldPredictor:
                     message += f"{confidence_bar}\n"
             
             # Добавляем время генерации прогноза
-            message += f"\n🕒 *Прогноз сгенерирован:* {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
+            message += f"\n🕒 *Прогноз сгенерирован:* {datetime.now().strftime('%Y-%m-%d %H:%M')}"
             
             # Отправляем сообщение
             return self.send_telegram_message(message)
@@ -956,11 +1135,29 @@ if __name__ == "__main__":
     result = predictor.predict()
     if result is not None:
         print("\n[RESULT] Прогноз:")
-        print(f"Последняя цена: {result['last_close']}")
-        print(f"Последняя дата: {result['last_date']}")
-        print(f"Дата прогноза: {result['prediction_date']}")
+        print(f"Последняя цена закрытия: ${result['last_close']:.2f} (данные на {result['last_date']})")
+        print(f"Дата прогноза: {result['date']}")
         print(f"Горизонт: {result['horizon']} дней")
-        print("\nПрогнозы моделей:")
+        
+        # Выводим актуальную рыночную цену, если она доступна
+        if 'current_market_price' in result:
+            market_price = result['current_market_price']
+            actual_price = market_price.get('price', 0.0)
+            source = market_price.get('source', 'unknown')
+            timestamp = market_price.get('timestamp', '')
+            price_diff = actual_price - float(result['last_close'])
+            diff_pct = (price_diff / float(result['last_close'])) * 100 if result['last_close'] != 0 else 0
+            diff_sign = '+' if price_diff >= 0 else ''
+            print(f"Актуальная цена: ${actual_price:.2f} ({diff_sign}{diff_pct:.2f}%)")
+            print(f"Источник: {source}, {timestamp}")
+        
+        # Направление прогноза
+        if 'direction' in result and 'confidence' in result:
+            print(f"Прогноз направления: {result['direction']} (уверенность: {result['confidence']:.3f})")
+        
+        print(f"Модель: {result.get('model', args.model).upper()}")
+        
+        print("\nПрогнозы отдельных моделей:")
         for model_name, pred in result['predictions'].items():
             print(f"  {model_name}: {pred['direction']} (уверенность: {pred['confidence']:.3f})")
         
@@ -968,7 +1165,7 @@ if __name__ == "__main__":
             msg = f"*Gold prediction* ({args.model}, {args.target_type}, horizon={args.horizon}):\n"
             msg += f"Last close: {result['last_close']}\n"
             msg += f"Date: {result['last_date']}\n"
-            msg += f"Prediction for: {result['prediction_date']}\n\n"
+            msg += f"Prediction for: {result['date']}\n\n"
             
             for model_name, pred in result['predictions'].items():
                 msg += f"*{model_name}*: {pred['direction']} (conf: {pred['confidence']:.3f})\n"

@@ -11,12 +11,11 @@ import logging
 import json
 from datetime import datetime, timedelta
 import asyncio
-import asyncio
 import schedule
 import time
 import threading
-from datetime import datetime, timedelta
 
+from config_loader import load_environment_variables, get_config
 from data_updater import update_gold_history_from_bybit
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -43,18 +42,25 @@ class GoldPredictorBot:
         Args:
             config_path (str): Путь к конфигурационному файлу
         """
-        self.config_path = config_path
-        self.config = self._load_config()
+        # Загружаем переменные окружения
+        load_environment_variables()
         
-        if not self.config.get("telegram_token"):
-            raise ValueError("Не указан токен Telegram-бота в конфигурации")
+        self.config_path = config_path
+        # Загружаем конфигурацию с учетом переменных окружения
+        self.config = get_config(config_path)
+        
+        # Получаем токен Telegram из конфигурации или переменных окружения
+        telegram_token = self.config.get("telegram_token")
+        
+        if not telegram_token:
+            raise ValueError("Не указан токен Telegram-бота в конфигурации или переменных окружения. Добавьте TELEGRAM_TOKEN в .env файл")
         
         # Инициализация компонентов
         self.predictor = GoldPredictor(config_path=config_path)
         self.tracker = PredictionTracker()
         
         # Инициализация бота
-        self.application = Application.builder().token(self.config["telegram_token"]).build()
+        self.application = Application.builder().token(telegram_token).build()
         
         # Регистрация обработчиков
         self._register_handlers()
@@ -66,21 +72,14 @@ class GoldPredictorBot:
     
     def _load_config(self):
         """
-        Загрузка конфигурации из файла.
+        Загрузка конфигурации из файла и переменных окружения.
         
         Returns:
             dict: Конфигурация
         """
-        if os.path.exists(self.config_path):
-            try:
-                with open(self.config_path, 'r') as f:
-                    return json.load(f)
-            except json.JSONDecodeError as e:
-                logger.error(f"Ошибка при загрузке конфигурации: {e}")
-                return {}
-        else:
-            logger.error(f"Файл конфигурации не найден: {self.config_path}")
-            return {}
+        # Теперь используем модуль config_loader для загрузки конфигурации
+        # Этот метод оставлен для обратной совместимости
+        return get_config(self.config_path)
     
     def _register_handlers(self):
         """Регистрация обработчиков команд и callback-запросов."""
@@ -308,14 +307,14 @@ class GoldPredictorBot:
             is_callback (bool): True, если вызвано из callback-запроса
         """
         # Отправляем сообщение о начале прогнозирования
-        message = "*🔄 Генерирую прогноз... Пожалуйста, подождите.*"
+        message = "Генерирую прогноз... Пожалуйста, подождите."
         
         if is_callback:
-            await update.callback_query.edit_message_text(message, parse_mode="Markdown")
+            await update.callback_query.edit_message_text(message)
             chat_id = update.callback_query.message.chat_id
             message_id = update.callback_query.message.message_id
         else:
-            sent_message = await update.message.reply_text(message, parse_mode="Markdown")
+            sent_message = await update.message.reply_text(message)
             chat_id = update.message.chat_id
             message_id = sent_message.message_id
         
@@ -353,7 +352,7 @@ class GoldPredictorBot:
                     logger.error('Отсутствуют API ключи Bybit в .env и конфиге')
                     await self.application.bot.send_message(
                         chat_id=chat_id,
-                        text="⚠️ Невозможно обновить данные: отсутствуют API ключи Bybit"
+                        text="Невозможно обновить данные: отсутствуют API ключи Bybit"
                     )
                 else:
                     csv_path = os.path.join(self.predictor.data_dir, 'GC_F_latest.csv')
@@ -379,9 +378,13 @@ class GoldPredictorBot:
                 # Сохраняем предсказание
                 self.tracker.save_prediction(prediction)
                 
+                # Безопасный доступ к направлению и уверенности
+                direction = prediction.get("direction", "UNKNOWN")
+                confidence = prediction.get("confidence", 0.0)
+                
                 # Формируем сообщение с прогнозом
-                emoji_direction = "🔼" if prediction["direction"] == "UP" else "🔽"
-                emoji_confidence = "🎯" if prediction["confidence"] > 0.7 else "🔍"
+                emoji_direction = "🔼" if direction == "UP" else "🔽" if direction == "DOWN" else "⏹️"
+                emoji_confidence = "🎯" if confidence > 0.7 else "🔍"
                 
                 # Определяем модель с эмодзи
                 model_type = prediction.get("model", "ensemble")
@@ -392,37 +395,46 @@ class GoldPredictorBot:
                 }.get(model_type.lower(), "🔮")
                 
                 # Красивое форматирование с Markdown
-                message = f"*📈 Прогноз цены золота*\n\n"
-                message += f"📅 *Дата:* {prediction['prediction_date']}\n\n"
-                message += f"{emoji_direction} *Направление:* {prediction['direction']}\n"
-                message += f"💰 *Текущая цена:* ${prediction['current_price']:.2f}\n"
-                message += f"{emoji_confidence} *Вероятность:* {prediction['confidence']:.2f}\n\n"
-                message += f"{model_emoji} *Модель:* {model_type.upper()}\n\n"
+                message = f"Прогноз цены золота\n\n"
+                message += f"Дата: {prediction.get('date', prediction.get('prediction_date', ''))}\n\n"
+                message += f"{emoji_direction} Направление: {direction}\n"
+                # Безопасный доступ к текущей цене
+                current_price = prediction.get('current_price', prediction.get('last_close', 0.0))
+                message += f"Текущая цена: ${current_price:.2f}\n"
+                message += f"{emoji_confidence} Вероятность: {confidence:.2f}\n\n"
+                message += f"{model_emoji} Модель: {model_type.upper()}\n\n"
                 
                 # Добавляем прогнозы отдельных моделей
-                message += "*Прогнозы моделей:*\n"
-                for model_name, pred in prediction.get("all_predictions", {}).items():
-                    model_icon = {
-                        "xgboost": "🌲",
-                        "lstm": "🧠",
-                        "ensemble": "⚖️"
-                    }.get(model_name.lower(), "🔮")
-                    direction_icon = "🔼" if pred['direction'] == "UP" else "🔽"
-                    confidence_value = pred['confidence']
+                all_models = prediction.get("all_predictions", prediction.get("predictions", {}))
+                if all_models:
+                    # Создаем копию словаря и удаляем weighted_ensemble
+                    individual_models = {k: v for k, v in all_models.items() if k != 'weighted_ensemble'}
                     
-                    # Добавляем визуализацию уверенности в виде бара
-                    confidence_bar = ""
-                    bar_length = int(confidence_value * 10)
-                    if pred['direction'] == "UP":
-                        confidence_bar = "🟩" * bar_length + "⬜️" * (10 - bar_length)
-                    else:  # DOWN
-                        confidence_bar = "🟥" * bar_length + "⬜️" * (10 - bar_length)
-                        
-                    message += f"{model_icon} *{model_name.capitalize()}:* {direction_icon} {pred['direction']} ({confidence_value:.2f})\n"
-                    message += f"{confidence_bar}\n"
+                    if individual_models:
+                        message += "💫 Прогнозы моделей:\n"
+                        for model_name, pred in individual_models.items():
+                            model_icon = {
+                                "xgboost": "🌲",
+                                "lstm": "🧠",
+                                "ensemble": "⚖️"
+                            }.get(model_name.lower(), "🔮")
+                            direction_icon = "🔼" if pred['direction'] == "UP" else "🔽"
+                            confidence_value = pred['confidence']
+                            
+                            # Добавляем визуализацию уверенности в виде бара
+                            bar_length = int(confidence_value * 10)
+                            confidence_bar = ""
+                            if pred['direction'] == "UP":
+                                confidence_bar = "🟩" * bar_length + "⬜️" * (10 - bar_length)
+                            else:  # DOWN
+                                confidence_bar = "🟥" * bar_length + "⬜️" * (10 - bar_length)
+                            
+                            # Добавляем строку с информацией о модели и ее предсказании
+                            message += f"{model_icon} {model_name.capitalize()}: {direction_icon} {pred['direction']} ({confidence_value:.2f})\n"
+                            message += f"{confidence_bar}\n"
                 
                 # Добавляем время прогноза
-                message += f"\n🕒 *Дата прогноза:* {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                message += f"\nПрогноз сгенерирован: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
                 
                 # Кнопки для дальнейших действий
                 keyboard = [
@@ -439,13 +451,12 @@ class GoldPredictorBot:
                     chat_id=chat_id,
                     message_id=message_id,
                     text=message,
-                    reply_markup=reply_markup,
-                    parse_mode="Markdown"
+                    reply_markup=reply_markup
                 )
             else:
                 # В случае ошибки прогнозирования
                 message = (
-                    "*❌ Не удалось получить прогноз*\n\n"
+                    "Не удалось получить прогноз\n\n"
                     "Произошла ошибка при генерации прогноза. "
                     "Пожалуйста, попробуйте позже или обратитесь к разработчику."
                 )
@@ -460,14 +471,13 @@ class GoldPredictorBot:
                     chat_id=chat_id,
                     message_id=message_id,
                     text=message,
-                    reply_markup=reply_markup,
-                    parse_mode="Markdown"
+                    reply_markup=reply_markup
                 )
         except Exception as e:
             logger.error(f"Ошибка при генерации прогноза: {e}")
             
             message = (
-                "*❌ Ошибка*\n\n"
+                "Ошибка\n\n"
                 f"Произошла ошибка при генерации прогноза: {str(e)}\n"
                 "Пожалуйста, попробуйте позже или обратитесь к разработчику."
             )
@@ -483,8 +493,7 @@ class GoldPredictorBot:
                     chat_id=chat_id,
                     message_id=message_id,
                     text=message,
-                    reply_markup=reply_markup,
-                    parse_mode="Markdown"
+                    reply_markup=reply_markup
                 )
             except Exception as e2:
                 logger.error(f"Ошибка при обновлении сообщения: {e2}")
@@ -502,12 +511,12 @@ class GoldPredictorBot:
         
         if stats["total"] > 0:
             message = (
-                "*📊 Статистика прогнозов*\n\n"
+                "Статистика прогнозов\n\n"
                 f"Всего прогнозов: {stats['total']}\n"
                 f"Верных прогнозов: {stats['correct']} ({stats['accuracy'] * 100:.1f}%)\n\n"
-                f"🔥 Текущая серия: {stats['recent_streak']} прогнозов\n"
-                f"🏆 Лучшая серия: {stats['best_streak']} прогнозов\n\n"
-                "*Статистика по моделям:*\n"
+                f"Текущая серия: {stats['recent_streak']} прогнозов\n"
+                f"Лучшая серия: {stats['best_streak']} прогнозов\n\n"
+                "Статистика по моделям:\n"
             )
             
             # Добавляем статистику по моделям
@@ -518,10 +527,10 @@ class GoldPredictorBot:
                         "lstm": "🧠",
                         "ensemble": "⚖️"
                     }.get(model.lower(), "🔮")
-                    message += f"{model_icon} *{model.capitalize()}*: {model_stats['correct']}/{model_stats['total']} ({model_stats['accuracy'] * 100:.1f}%)\n"
+                    message += f"{model_icon} {model.capitalize()}: {model_stats['correct']}/{model_stats['total']} ({model_stats['accuracy'] * 100:.1f}%)\n"
         else:
             message = (
-                "*📊 Статистика прогнозов*\n\n"
+                "Статистика прогнозов\n\n"
                 "Пока нет проверенных прогнозов. Статистика будет доступна после верификации "
                 "предсказаний на основе фактических движений цены."
             )
@@ -536,9 +545,9 @@ class GoldPredictorBot:
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         if is_callback:
-            await update.callback_query.edit_message_text(message, reply_markup=reply_markup, parse_mode="Markdown")
+            await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
         else:
-            await update.message.reply_text(message, reply_markup=reply_markup, parse_mode="Markdown")
+            await update.message.reply_text(message, reply_markup=reply_markup)
     
     async def _show_weekly_statistics(self, update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
         """
@@ -561,9 +570,9 @@ class GoldPredictorBot:
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         if is_callback:
-            await update.callback_query.edit_message_text(report, reply_markup=reply_markup, parse_mode="Markdown")
+            await update.callback_query.edit_message_text(report, reply_markup=reply_markup)
         else:
-            await update.message.reply_text(report, reply_markup=reply_markup, parse_mode="Markdown")
+            await update.message.reply_text(report, reply_markup=reply_markup)
     
     async def _show_monthly_statistics(self, update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
         """
@@ -578,7 +587,7 @@ class GoldPredictorBot:
         stats = monthly_stats["statistics"]
         
         # Формируем сообщение
-        message = f"*📊 Статистика за {monthly_stats['current_month']}*\n\n"
+        message = f"Статистика за {monthly_stats['current_month']}\n\n"
         
         if stats["total"] > 0:
             message += f"Всего прогнозов: {stats['total']}\n"
@@ -586,13 +595,29 @@ class GoldPredictorBot:
             
             # Добавляем статистику по моделям
             general_stats = self.tracker.get_statistics()
-            message += "*За всё время:*\n"
+            message += "За всё время:\n"
             message += f"Общая точность: {general_stats['accuracy'] * 100:.1f}%\n\n"
+            
+            # Добавляем актуальную рыночную цену
+            current_market_price = monthly_stats.get('current_market_price', None)
+            if current_market_price is not None:
+                actual_price = current_market_price.get('price', 0.0)
+                source = current_market_price.get('source', 'unknown')
+                timestamp = current_market_price.get('timestamp', '')
+                
+                # Вычисляем разницу цен
+                price_diff = actual_price - monthly_stats['last_close']
+                diff_pct = (price_diff / monthly_stats['last_close']) * 100 if monthly_stats['last_close'] != 0 else 0
+                diff_emoji = "🔺" if price_diff > 0 else "🔻" if price_diff < 0 else "↔️"
+                
+                # Добавляем актуальную цену в сообщение с экранированием спецсимволов
+                message += f"Актуальная цена: ${actual_price:.2f} {diff_emoji} ({diff_pct:+.2f}%)\n"
+                message += f"   _Источник: {source}, {timestamp}_\n"
             
             # Добавляем последние предсказания
             recent_preds = monthly_stats["recent_predictions"]
             if recent_preds:
-                message += "*Последние проверенные прогнозы:*\n"
+                message += "Последние проверенные прогнозы:\n"
                 for pred in recent_preds[:5]:  # Показываем только 5 последних
                     date = pred.get("prediction_date", "")
                     is_correct = pred.get("is_correct", False)
@@ -615,9 +640,9 @@ class GoldPredictorBot:
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         if is_callback:
-            await update.callback_query.edit_message_text(message, reply_markup=reply_markup, parse_mode="Markdown")
+            await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
         else:
-            await update.message.reply_text(message, reply_markup=reply_markup, parse_mode="Markdown")
+            await update.message.reply_text(message, reply_markup=reply_markup)
     
     async def _show_settings(self, update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
         """
@@ -636,8 +661,8 @@ class GoldPredictorBot:
         
         # Формируем сообщение
         message = (
-            "*⚙️ Настройки прогнозирования*\n\n"
-            "*Текущие параметры:*\n"
+            "Настройки прогнозирования\n\n"
+            "Текущие параметры:\n"
             f"• Модель: {model_type.upper()}\n"
             f"• Горизонт: {horizon} {'день' if horizon == 1 else 'дня' if 1 < horizon < 5 else 'дней'}\n"
             f"• Тип цели: {target_type.upper()}\n\n"
@@ -661,9 +686,9 @@ class GoldPredictorBot:
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         if is_callback:
-            await update.callback_query.edit_message_text(message, reply_markup=reply_markup, parse_mode="Markdown")
+            await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
         else:
-            await update.message.reply_text(message, reply_markup=reply_markup, parse_mode="Markdown")
+            await update.message.reply_text(message, reply_markup=reply_markup)
     
     def _schedule_tasks(self):
         """Настройка расписания задач."""
@@ -680,7 +705,7 @@ class GoldPredictorBot:
         # Отправляем сообщение о настройке расписания, если указан chat_id
         chat_id = self.config.get("telegram_chat_id")
         if chat_id:
-            msg = f"*⏰ Планировщик Gold Predictor активирован*\n\n"
+            msg = f"Планировщик Gold Predictor активирован\n\n"
             msg += f"• Ежедневное прогнозирование: {prediction_time}\n"
             msg += f"• Ежедневная верификация: {verification_time}\n\n"
             msg += f"Бот будет автоматически отправлять прогнозы и статистику в это время."
@@ -692,8 +717,7 @@ class GoldPredictorBot:
                 url = f"https://api.telegram.org/bot{self.config['telegram_token']}/sendMessage"
                 payload = {
                     'chat_id': chat_id,
-                    'text': msg,
-                    'parse_mode': 'Markdown'
+                    'text': msg
                 }
                 response = requests.post(url, json=payload)
                 if not response.ok:
@@ -710,7 +734,7 @@ class GoldPredictorBot:
     def scheduled_prediction(self):
         """Отправка запланированного прогноза."""
         try:
-            logger.info("🔮 Выполнение запланированного прогноза...")
+            logger.info("Выполнение запланированного прогноза...")
             
             # Создаем аргументы для предиктора
             class Args:
@@ -728,7 +752,7 @@ class GoldPredictorBot:
             result = self.predictor.predict()
             
             if result:
-                logger.info(f"✅ Запланированный прогноз успешно сгенерирован на {result.get('prediction_date')}")
+                logger.info(f"Запланированный прогноз успешно сгенерирован на {result.get('date', result.get('prediction_date', ''))}")
                 
                 # Отправляем сообщение в Telegram
                 chat_id = self.config.get("telegram_chat_id")
@@ -740,12 +764,11 @@ class GoldPredictorBot:
                         url = f"https://api.telegram.org/bot{self.config['telegram_token']}/sendMessage"
                         payload = {
                             'chat_id': chat_id,
-                            'text': prediction_message,
-                            'parse_mode': 'Markdown'
+                            'text': prediction_message
                         }
                         response = requests.post(url, json=payload)
                         if response.ok:
-                            logger.info(f"✉️ Запланированный прогноз отправлен в Telegram")
+                            logger.info(f"Запланированный прогноз отправлен в Telegram")
                         else:
                             logger.warning(f"Неудачный ответ от Telegram API: {response.status_code} - {response.text}")
                     except Exception as e:
@@ -753,10 +776,10 @@ class GoldPredictorBot:
                 
                 return True
             else:
-                logger.error("❌ Не удалось сгенерировать запланированный прогноз")
+                logger.error("Не удалось сгенерировать запланированный прогноз")
                 return False
         except Exception as e:
-            logger.error(f"❌ Ошибка при генерации запланированного прогноза: {e}")
+            logger.error(f"Ошибка при генерации запланированного прогноза: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return False
@@ -766,12 +789,12 @@ class GoldPredictorBot:
         try:
             # Получаем вчерашнюю дату
             yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-            logger.info(f"🧪 Верификация прогноза для даты {yesterday}")
+            logger.info(f"Верификация прогноза для даты {yesterday}")
             
             # Получаем последние данные
             data = self.predictor.prepare_latest_data()
             if data is None:
-                logger.error("❌ Не удалось получить последние данные для верификации")
+                logger.error("Не удалось получить последние данные для верификации")
                 return False
             
             # Получаем актуальную информацию о ценах
@@ -779,7 +802,7 @@ class GoldPredictorBot:
             prev_close = data.get('prev_close', None)
             
             if prev_close is None:
-                logger.error("❌ Нет информации о предыдущей цене для верификации")
+                logger.error("Нет информации о предыдущей цене для верификации")
                 return False
             
             # Определяем фактическое направление
@@ -790,7 +813,7 @@ class GoldPredictorBot:
             verified = self.tracker.verify_prediction(yesterday, actual_direction)
             
             if verified:
-                logger.info(f"✅ Прогноз для {yesterday} успешно верифицирован")
+                logger.info(f"Прогноз для {yesterday} успешно верифицирован")
                 
                 # Получаем обновленную статистику и отправляем отчет, если есть успешные/неуспешные серии
                 stats = self.tracker.get_statistics()
@@ -800,7 +823,7 @@ class GoldPredictorBot:
                     if stats.get("recent_streak", 0) >= 3:
                         try:
                             # Отправляем отчет о серии успешных прогнозов
-                            streak_message = f"*🔥 Серия успешных прогнозов: {stats['recent_streak']}*\n\n"
+                            streak_message = f"Серия успешных прогнозов: {stats['recent_streak']}\n\n"
                             streak_message += f"Текущая серия успешных прогнозов достигла {stats['recent_streak']} подряд!\n"
                             streak_message += f"Общая точность: {stats['accuracy'] * 100:.1f}%"
                             
@@ -809,8 +832,7 @@ class GoldPredictorBot:
                             url = f"https://api.telegram.org/bot{self.config['telegram_token']}/sendMessage"
                             payload = {
                                 'chat_id': chat_id,
-                                'text': streak_message,
-                                'parse_mode': 'Markdown'
+                                'text': streak_message
                             }
                             response = requests.post(url, json=payload)
                             if not response.ok:
@@ -827,8 +849,7 @@ class GoldPredictorBot:
                             url = f"https://api.telegram.org/bot{self.config['telegram_token']}/sendMessage"
                             payload = {
                                 'chat_id': chat_id,
-                                'text': weekly_report,
-                                'parse_mode': 'Markdown'
+                                'text': weekly_report
                             }
                             response = requests.post(url, json=payload)
                             if not response.ok:
@@ -838,21 +859,21 @@ class GoldPredictorBot:
                 
                 return True
             else:
-                logger.error(f"❌ Не удалось верифицировать прогноз для {yesterday}")
+                logger.error(f"Не удалось верифицировать прогноз для {yesterday}")
                 return False
         except Exception as e:
-            logger.error(f"❌ Ошибка при верификации прогноза: {e}")
+            logger.error(f"Ошибка при верификации прогноза: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return False
     
     def _format_prediction_message(self, prediction):
         """Форматирование сообщения с прогнозом для Telegram."""
-        # Определяем эмодзи на основе направления и уверенности
+        # Добавляем основную информацию
+        prediction_date = prediction.get('date', prediction.get('prediction_date', ''))
         direction = prediction.get('direction', 'UNKNOWN')
         confidence = prediction.get('confidence', 0.0)
-        price = prediction.get('current_price', 0.0)
-        prediction_date = prediction.get('prediction_date', '')
+        price = prediction.get('current_price', prediction.get('last_close', 0.0))
         model_type = prediction.get('model', 'ensemble')
         
         # Эмодзи для направления движения цены
@@ -868,18 +889,18 @@ class GoldPredictorBot:
             "ensemble": "⚖️"  # Весы для ансамбля
         }.get(model_type.lower(), "🔮")
         
-        # Создаем сообщение с Markdown форматированием
-        message = f"*📈 Ежедневный прогноз цены золота*\n\n"
-        message += f"📅 *Дата:* {prediction_date}\n"
-        message += f"💰 *Текущая цена:* ${price:.2f}\n\n"
-        message += f"{direction_emoji} *Направление:* {direction}\n"
-        message += f"{confidence_emoji} *Уверенность:* {confidence:.2f}\n\n"
-        message += f"{model_emoji} *Модель:* {model_type.upper()}\n\n"
+        # Создаем сообщение с красивым форматированием, но без сложного Markdown
+        message = f"📈 Ежедневный прогноз цены золота\n\n"
+        message += f"📅 Дата: {prediction_date}\n"
+        message += f"💰 Текущая цена: ${price:.2f}\n\n"
+        message += f"{direction_emoji} Направление: {direction}\n"
+        message += f"{confidence_emoji} Уверенность: {confidence:.2f}\n\n"
+        message += f"{model_emoji} Модель: {model_type.upper()}\n\n"
         
         # Добавляем прогнозы отдельных моделей
-        all_predictions = prediction.get('all_predictions', {})
+        all_predictions = prediction.get('all_predictions', prediction.get('predictions', {}))
         if all_predictions:
-            message += "*Прогнозы моделей:*\n"
+            message += "💫 Прогнозы моделей:\n"
             for model_name, pred in all_predictions.items():
                 model_icon = {
                     "xgboost": "🌲",
@@ -898,12 +919,12 @@ class GoldPredictorBot:
                 else:  # DOWN
                     confidence_bar = "🟥" * bar_length + "⬜️" * (10 - bar_length)
                 
-                message += f"{model_icon} *{model_name.capitalize()}:* {pred_emoji} {pred_direction} ({pred_confidence:.2f})\n"
+                message += f"{model_icon} {model_name.capitalize()}: {pred_emoji} {pred_direction} ({pred_confidence:.2f})\n"
                 message += f"{confidence_bar}\n"
         
         # Добавляем время генерации прогноза
-        message += f"\n🕒 *Прогноз сгенерирован:* {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
-        message += f"\n_Используйте команду /predict для получения нового прогноза_"
+        message += f"\nПрогноз сгенерирован: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
+        message += f"\nИспользуйте команду /predict для получения нового прогноза"
         
         return message
     
@@ -970,6 +991,16 @@ class GoldPredictorBot:
 # Запуск бота
 if __name__ == "__main__":
     try:
+        # Загружаем переменные окружения перед запуском бота
+        load_environment_variables()
+        
+        # Проверяем наличие токена в переменной окружения
+        import os
+        token = os.getenv('TELEGRAM_TOKEN')
+        if not token:
+            logger.warning("Не найден TELEGRAM_TOKEN в переменных окружения. Проверьте файл .env")
+        
+        # Запускаем бота
         bot = GoldPredictorBot()
         asyncio.run(bot.run())
     except KeyboardInterrupt:

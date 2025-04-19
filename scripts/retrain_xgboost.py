@@ -72,6 +72,9 @@ def retrain_xgboost(period='10y', target_type='binary', horizon=1, use_bybit=Tru
     loader = GoldDataLoader()
     data = loader.download_data(period=period)
     
+    # Импортируем os на уровне функции для обеспечения видимости
+    import os
+    
     # Обновляем данные с Bybit до текущего дня (если нужно)
     if use_bybit:
         logger.info("Обновление данных через Bybit API для получения самых свежих цен")
@@ -176,6 +179,9 @@ def retrain_xgboost(period='10y', target_type='binary', horizon=1, use_bybit=Tru
             logger.info(f"Топ-10 важных признаков: {sorted_importance[:10]}")
         except Exception as e:
             logger.warning(f"Не удалось получить важность признаков: {str(e)}")
+    
+    # Импортируем os еще раз перед использованием, чтобы избежать ошибок области видимости
+    import os
     
     # Сохраняем модель
     today = datetime.now().strftime('%Y%m%d')

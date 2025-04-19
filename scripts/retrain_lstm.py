@@ -78,6 +78,9 @@ def retrain_lstm(period='10y', target_type='binary', horizon=1, sequence_length=
     loader = GoldDataLoader()
     data = loader.download_data(period=period)
     
+    # Импортируем os на уровне функции для обеспечения видимости
+    import os
+    
     # Обновляем данные с Bybit до текущего дня (если нужно)
     if use_bybit:
         logger.info("Обновление данных через Bybit API для получения самых свежих цен")
@@ -213,6 +216,9 @@ def retrain_lstm(period='10y', target_type='binary', horizon=1, sequence_length=
     today = datetime.now().strftime('%Y%m%d')
     model_path = lstm_model.save_model(f"lstm_{target_type}_{today}.h5")
     logger.info(f"Модель сохранена в {model_path}")
+    
+    # Импортируем os еще раз перед использованием, чтобы избежать ошибок области видимости
+    import os
     
     # Обновляем конфигурацию
     predictor = GoldPredictor()
