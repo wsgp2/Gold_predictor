@@ -1,6 +1,7 @@
 # 💰 Gold Predictor - Система прогнозирования цены золота
 
 <p align="center">
+  <img src="https://img.shields.io/badge/version-1.0.0-blue.svg" alt="Version 1.0.0"/>
   <img src="https://img.shields.io/badge/Python-3.8%2B-blue" alt="Python 3.8+"/>
   <img src="https://img.shields.io/badge/TensorFlow-LSTM-orange" alt="TensorFlow"/>
   <img src="https://img.shields.io/badge/XGBoost-Gradient%20Boosting-green" alt="XGBoost"/>
@@ -281,4 +282,4 @@ python main.py --schedule --prediction-time "10:00" --verification-time "10:30"
 
 Сергей - [genpostavki2@yandex.ru](mailto:genpostavki2@yandex.ru)
 
-Ссылка на проект: [https://github.com/wsgp2/gold_predictor](https://github.com/wsgp2/gold_predictor)
+Ссылка на проект: [https://github.com/wsgp2/Gold_predictor](https://github.com/wsgp2/Gold_predictor)
